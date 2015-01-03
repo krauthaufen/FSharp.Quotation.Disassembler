@@ -449,10 +449,11 @@ module Monad =
 
     let stack : Expr<obj[]> = Expr.Var (Var("__stack", typeof<obj[]>)) |> Expr.Cast
 
+    let noVal = Expr.Value(())
     let pop : Builder<Expr * list<int>> = 
         { run = fun s -> 
             match s.stack with
-                | [] -> Success (<@@ true @@>, []), s //Error "empty stack", s
+                | [] -> Success (noVal, []), s //Error "empty stack", s
                 | (e,d)::rest -> Success (e, d |> Set.toList), { s with stack = rest }
         }
 
@@ -525,12 +526,41 @@ module CFG =
           content : list<Instruction>
         }
 
+    [<CustomEquality>]
+    [<CustomComparison>]
+    [<StructuredFormatDisplay("{AsString}")>]
     type Block = 
-        { mutable body : list<Instruction>
+        { startOffset : int
+          endOffset : int
+          mutable body : list<Instruction>
           mutable condition : Option<Expr>
           mutable nextTrue : Option<Block>
           mutable nextFalse : Option<Block> 
-        }
+          mutable prev : list<Block>
+        } with
+
+        member x.AsString =
+            let nt = match x.nextTrue with | Some n -> Some n.startOffset | None -> None
+            let nf = match x.nextFalse with | Some n -> Some n.startOffset | None -> None
+
+            sprintf "{ start: %d; body: %A; condition: %A; nextTrue: %A; nextFalse: %A }" x.startOffset x.body x.condition nt nf
+
+        override x.GetHashCode() =
+            x.startOffset.GetHashCode()
+
+        override x.Equals o =
+            match o with
+                | :? Block as o -> x.startOffset = o.startOffset
+                | _ -> false
+
+        interface IComparable with
+            member x.CompareTo o =
+                match o with
+                    | :? Block as o -> compare x.startOffset o.startOffset
+                    | _ -> failwith "uncomparable"
+
+        override x.ToString() =
+            x.AsString
 
     let createChunks (instructions : list<Instruction>) =
         let allTargets = 
@@ -552,7 +582,288 @@ module CFG =
             
         chunks
 
-    let decompileBranchLogic (args : Map<int, Var>) (locals : Map<int, Var>) (instructions : list<Instruction>) : list<Instruction> * Option<Expr> * int =
+    //let decompileBranchLogic (args : Map<int, Var>) (locals : Map<int, Var>) (instructions : list<Instruction>) : list<Instruction> * Option<Expr> * int =
+    let rec decompileBranchLogic (instructions : list<Instruction>) =
+        disasm {
+            match instructions with
+                | i::rest ->
+                    match i with
+                        | Nop -> return! decompileBranchLogic rest
+                        | LdArg(id) ->
+                            let! arg = getArg id
+                            do! push (Expr.Var arg) [i.offset]
+                            return! decompileBranchLogic rest
+                        | StLoc(id) ->
+                            let! loc = getLocal id
+                            let! value,d = pop
+
+                            let! isNew = setLocal id value
+                            return! decompileBranchLogic rest
+
+
+                        | LdLoc(id) ->
+                            let! local = getLocal id
+                            do! push (Expr.Var local) [i.offset]
+                            return! decompileBranchLogic rest
+
+                        | BinaryOp(op) ->
+                            let! (b,a,s) = pop2
+                            match Map.tryFind op binaryOperators with
+                                | Some mi ->
+                                    let mi = mi.MakeGenericMethod [|a.Type; b.Type; a.Type|]
+                                    do! push (Expr.Call(mi, [a;b])) (i.offset::s)
+                                    return! decompileBranchLogic rest
+                                | None ->
+                                    return! Error (sprintf "unsupported binary operator: %A" op)
+                        | Ldc(t,v) ->
+                            do! push (Expr.Value(v,t)) [i.offset]
+                            return! decompileBranchLogic rest
+
+                        | Cmp(c) ->
+                            let! (b,a,d) = pop2
+                            match Map.tryFind c binaryCmpOperators with
+                                | Some op ->
+                                    let op = op.MakeGenericMethod [|a.Type|]
+                                    do! push (Expr.Call(op, [a;b])) (i.offset::d)
+                                    return! decompileBranchLogic rest
+                                | None ->
+                                    return! Error (sprintf "unsupported operator: %A" c)
+
+                        | Ret ->
+                            let! v,_ = pop
+                            let! allInstructions = { run = fun s -> Success s.all, s}
+                            let instructions = allInstructions |> List.filter(fun ii -> ii.offset <= i.offset)
+
+                            return instructions, None, -1
+
+                        | Branch(cond,target) ->
+                            let! inverseCond, deps =
+                                disasm {
+                                    match cond with
+                                        | True -> 
+                                            let! v,d = pop
+                                            if v.Type = typeof<bool> then return Some <@@ not (%%v : bool) @@>, d
+                                            elif v.Type = typeof<int> then return Some <@@ (%%v : int) = 0 @@>, d
+                                            else return! Error (sprintf "unsupported value for condition: %A" v)
+                                        | False -> 
+                                            let! v,d = pop
+                                            if v.Type = typeof<bool> then return Some <@@ (%%v : bool) @@>, d
+                                            elif v.Type = typeof<int> then return Some <@@ (%%v : int) <> 0 @@>, d
+                                            else return! Error (sprintf "unsupported value for condition: %A" v)
+                                        | Unconditional ->
+                                            return Some <@@ false @@>, []
+
+                                        | other ->
+                                            let! (b,a,d) = pop2
+                                            match Map.tryFind other binaryCmpOperatorsNeg with
+                                                | Some op ->
+                                                    let op = op.MakeGenericMethod [|a.Type|]
+                                                    return Some(Expr.Call(op, [a;b])), d
+                                                | None ->
+                                                    return! Error (sprintf "unsupported operator: %A" other)
+                                                            
+                                }
+
+                            let deps = Set.ofList (i.offset::deps)
+                            let! allInstructions = { run = fun s -> Success s.all, s}
+
+                            let unused = allInstructions |> List.filter (fun i -> not <| Set.contains i.offset deps)
+
+
+                            return unused, inverseCond, target
+
+                        | _ ->
+                            return! Error (sprintf "unknown instruction: %A" i)
+                                
+                | [] ->
+                    let! allInstructions = { run = fun s -> Success s.all, s}
+                    return allInstructions, None, -1
+        }
+//
+//        let s = sim instructions
+//        match s.run { locals = locals; localValues = Map.empty; arguments = args; stack = []; all = instructions } with
+//            | Success v,_ -> v
+//            | Error e,_ ->
+//                failwith e
+
+    type DynamicFunction<'k, 'v when 'k : equality>(def : 'v) =
+        let store = Dictionary<'k, 'v>()
+
+        member x.Item
+            with get(key : 'k) =
+                match store.TryGetValue key with
+                    | (true, v) -> v
+                    | _ -> def
+            and set(key : 'k) (value : 'v) =
+                store.[key] <- value
+
+    let andEx (a : Option<Expr>) (b : Option<Expr>) =
+        match a, b with
+            | Some (Quotations.Patterns.Value(:? bool as v,_)), b ->
+                if v then b
+                else Expr.Value(false) |> Some
+
+            | a, Some (Quotations.Patterns.Value(:? bool as v,_)) ->
+                if v then a
+                else Expr.Value(false) |> Some
+
+            | None,b -> b
+            | a, None -> a
+            | Some a, Some b ->
+                Expr.IfThenElse(a, b, Expr.Value(false)) |> Some
+
+    let orEx (a : Option<Expr>) (b : Option<Expr>) =
+        match a, b with
+            | None,b -> b
+            | a, None -> a
+            | Some a, Some b ->
+                Expr.IfThenElse(a, Expr.Value(true), b) |> Some
+
+    let ifThenElse (c : Expr) (a : Expr) (b : Expr) =
+        match c with
+            | Quotations.Patterns.Value(:? bool as v, _) ->
+                if v then a
+                else b
+            | _ ->
+                let a =
+                    if a.Type = typeof<int> && b.Type = typeof<bool> then 
+                        match a with
+                            | Quotations.Patterns.Value(:? int as v, _) -> Expr.Value(v <> 0)
+                            | _ -> a
+                    else
+                        a
+
+                let b =
+                    if b.Type = typeof<int> && a.Type = typeof<bool> then 
+                        match b with
+                            | Quotations.Patterns.Value(:? int as v, _) -> Expr.Value(v <> 0)
+                            | _ -> b
+                    else
+                        b
+
+                Expr.IfThenElse(c, a, b)
+
+    let toBlocksInternal (args : Map<int, Var>) (locals : Map<int, Var>) (chunks : list<Chunk>) =
+        let blocks = chunks |> List.map (fun c -> c.startOffset, { startOffset = c.startOffset; endOffset = c.endOffset; body = c.content; condition = None; nextTrue = None; nextFalse = None; prev = [] }) |> Map.ofList
+
+        let _,start = Seq.head (blocks |> Map.toSeq)
+        let mutable s = { locals = locals; localValues = Map.empty; arguments = args; stack = []; all = [] }
+
+        let inputStates = DynamicFunction<Block, list<BuilderState>>([])
+        inputStates.[start] <- [s]
+
+        let queue = SortedList<int, Block * Option<Expr>>()
+        queue.Add(start.startOffset, (start, None))
+
+        while queue.Count > 0 do
+            let (b, c) = queue.Values.[0]
+            queue.RemoveAt(0)
+
+            let states = inputStates.[b]
+
+            match states with
+                | [s] ->
+                    let v, s' = (decompileBranchLogic b.body).run { s with all = b.body }
+                    match v with
+                        | Success(rest, cond, trueBranch) ->
+                            b.body <- rest
+                            match cond with
+                                | Some(Quotations.Patterns.Value(:? bool as v, _)) ->
+                                    if v then
+                                        failwith ""
+                                    else
+                                        match Map.tryFind trueBranch blocks with
+                                            | Some t ->
+                                                b.nextFalse <- Some t
+                                                t.prev <- b::t.prev
+                                                if not <| queue.ContainsKey t.startOffset then
+                                                    queue.Add(t.startOffset, (t, andEx c cond))
+                                                inputStates.[t] <- s'::inputStates.[t]
+                                            | None ->
+                                                ()
+                                | _ ->
+                                    b.condition <- cond
+                                    match Map.tryFind b.endOffset blocks with
+                                        | Some t ->
+                                            b.nextTrue <- Some t
+                                            t.prev <- b::t.prev
+                                            if not <| queue.ContainsKey t.startOffset then
+                                                queue.Add(t.startOffset, (t, c))
+                                            inputStates.[t] <- s'::inputStates.[t]
+                                        | None ->
+                                            ()
+
+                                    match Map.tryFind trueBranch blocks with
+                                        | Some t ->
+                                            b.nextFalse <- Some t
+                                            t.prev <- b::t.prev
+                                            if not <| queue.ContainsKey t.startOffset then
+                                                queue.Add(t.startOffset, (t, andEx c cond))
+                                            inputStates.[t] <- s'::inputStates.[t]
+                                        | None ->
+                                            ()
+
+                        | Error e ->
+                            failwith e
+                | [sa;sb] when sa.stack = sb.stack ->
+                    inputStates.[b] <- [sa]
+                    queue.Add(b.startOffset, (b, c))
+                | [l;r] ->
+                    let cond = c.Value
+                    let zipped = List.zip l.stack r.stack |> List.map (fun ((l,dl),(r, dr)) -> ifThenElse cond l r, Set.union dl dr)
+                    printfn "%A" zipped
+                    inputStates.[b] <- [{ l with stack = zipped }]
+                    queue.Add(b.startOffset, (b, c))
+                | many ->
+                    printfn "many: %A" many
+                    failwith "not implemented"
+
+//
+//        for c in chunks do
+//            let b = Map.find c.startOffset blocks
+//
+//            let body, condition, trueBranch = decompileBranchLogic args locals b.body
+//            b.body <- body
+//
+//            match condition with
+//                | Some(Quotations.Patterns.Value((:? bool as v), _)) ->
+//                    if v then
+//                        match Map.tryFind c.endOffset blocks with
+//                            | Some t ->
+//                                b.nextTrue <- Some t
+//                                t.prev <- b::t.prev
+//                            | None ->
+//                                ()
+//                    else
+//                        match Map.tryFind trueBranch blocks with
+//                            | Some t ->
+//                                b.nextFalse <- Some t
+//                                t.prev <- b::t.prev
+//                            | None ->
+//                                ()
+//                | _ -> 
+//
+//                    b.condition <- condition
+//
+//                    match Map.tryFind trueBranch blocks with
+//                        | Some t ->
+//                            b.nextFalse <- Some t
+//                            t.prev <- b::t.prev
+//                        | None ->
+//                            ()
+//
+//                    match Map.tryFind c.endOffset blocks with
+//                        | Some t ->
+//                            b.nextTrue <- Some t
+//                            t.prev <- b::t.prev
+//                        | None ->
+//                            ()
+//
+//            () 
+
+        blocks |> Map.toSeq |> Seq.map snd |> Seq.toList
+
+    let extractJump (args : Map<int, Var>) (locals : Map<int, Var>) (chunk : Chunk) =
         let rec sim (instructions : list<Instruction>) =
             disasm {
                 match instructions with
@@ -560,12 +871,9 @@ module CFG =
                         match i with
                             | Nop -> return! sim rest
                             | LdArg(id) ->
-                                match Map.tryFind id args with
-                                    | Some arg ->
-                                        do! push (Expr.Var arg) [i.offset]
-                                        return! sim rest
-                                    | None ->
-                                        return! Error (sprintf "invalid argument index: %d" id)
+                                let! arg = getArg id
+                                do! push (Expr.Var arg) [i.offset]
+                                return! sim rest
                             | StLoc(id) ->
                                 let! loc = getLocal id
                                 let! value,d = pop
@@ -604,7 +912,10 @@ module CFG =
 
                             | Ret ->
                                 let! v,_ = pop
-                                return! sim rest
+                                let! allInstructions = { run = fun s -> Success s.all, s}
+                                let instructions = allInstructions |> List.filter(fun ii -> ii.offset <= i.offset)
+
+                                return instructions, None, -1
 
                             | Branch(cond,target) ->
                                 let! inverseCond, deps =
@@ -621,7 +932,7 @@ module CFG =
                                                 elif v.Type = typeof<int> then return Some <@@ (%%v : int) <> 0 @@>, d
                                                 else return! Error (sprintf "unsupported value for condition: %A" v)
                                             | Unconditional ->
-                                                return None, []
+                                                return Some <@@ false @@>, []
 
                                             | other ->
                                                 let! (b,a,d) = pop2
@@ -648,30 +959,9 @@ module CFG =
                     | [] ->
                         let! allInstructions = { run = fun s -> Success s.all, s}
                         return allInstructions, None, -1
-            }
+            }  
 
-        let s = sim instructions
-        match s.run { locals = locals; localValues = Map.empty; arguments = args; stack = []; all = instructions } with
-            | Success v,_ -> v
-            | Error e,_ ->
-                failwith e
-
-    let toBlocksInternal (args : Map<int, Var>) (locals : Map<int, Var>) (chunks : list<Chunk>) =
-        let blocks = chunks |> List.map (fun c -> c.startOffset, { body = c.content; condition = None; nextTrue = None; nextFalse = None }) |> Map.ofList
-
-        for c in chunks do
-            let b = Map.find c.startOffset blocks
-
-            let body, condition, trueBranch = decompileBranchLogic args locals b.body
-            b.body <- body
-            b.condition <- condition
-
-            b.nextTrue <- Map.tryFind trueBranch blocks
-            b.nextFalse <- Map.tryFind c.endOffset blocks
-
-            () 
-
-        blocks |> Map.toSeq |> Seq.map snd |> Seq.toList
+        (sim chunk.content).run  { locals = locals; localValues = Map.empty; arguments = args; stack = []; all = chunk.content }
 
     let toBlocks (mi : MethodBase) =
         let body = mi.GetMethodBody()
@@ -699,8 +989,12 @@ module CFG =
             printfn "%d: " c.startOffset
             for i in c.content do
                 printfn "  %A" i
+            
+            match extractJump arguments locals c with
+                | Success(rest, c, t), _ -> printfn "  %A -> %d" rest t
+                | _ -> ()
 
-        toBlocksInternal arguments locals chunks
+        [] //toBlocksInternal arguments locals chunks
 
 
 module Disasm =
