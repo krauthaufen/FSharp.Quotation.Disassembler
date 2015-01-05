@@ -12,7 +12,7 @@ open ICSharpCode.NRefactory.CSharp
 open ICSharpCode.NRefactory.TypeSystem
 open Microsoft.FSharp.Quotations
 
-type ExprState = { arguments : Map<string, Var>; locals : Map<string, Var>; declared : Map<string, Var> }
+type ExprState = { args : list<Var>; arguments : Map<string, Var>; locals : Map<string, Var> }
 type ExprResult<'a> = { run : ExprState -> 'a * ExprState}
 
 [<AutoOpen>]
@@ -225,14 +225,7 @@ module Builder =
                 | _ ->
                     <@@ %%e - 1 @@>
 
-type QuotationVisitor(mi : MethodInfo, m : MethodDefinition) as this =
-
-    let resolve (t : TypeReference) =
-        Type.GetType(t.FullName)
-
-    let args = m.Parameters |> Seq.map (fun p -> Var(p.Name, resolve p.ParameterType)) |> Seq.toList
-    let argsMap = args |> List.map (fun a -> a.Name, a) |> Map.ofList
-
+type QuotationVisitor(m : MethodDefinition) as this =
     let resolveType (t : AstType) : Type =
         match t with
             | :? ICSharpCode.NRefactory.CSharp.PrimitiveType as p ->
@@ -241,7 +234,6 @@ type QuotationVisitor(mi : MethodInfo, m : MethodDefinition) as this =
                     | _ -> failwith "asdsad"
             | _ ->
                 failwith ""
-
 
     let ret (e : Expr) =
         let m = retMethod.MakeGenericMethod [|e.Type|]
@@ -484,6 +476,7 @@ type QuotationVisitor(mi : MethodInfo, m : MethodDefinition) as this =
         member x.VisitMethodDeclaration(methodDeclaration: MethodDeclaration) : ExprResult<list<Expr> -> Expr> =
             expr {
                 let! body = methodDeclaration.Body.AcceptVisitor(x)
+                let! args = { run = fun s -> (fun _ -> s.args), s}
 
                 let rec buildLambda (args : list<Var>) (body : Expr) =
                     match args with
@@ -725,7 +718,7 @@ let main args =
     let builder = AstBuilder(ctx)
     builder.AddType(m.DeclaringType)
     builder.RunTransformations()
-    let ex = builder.SyntaxTree.AcceptVisitor(QuotationVisitor(mi, m))
+    let ex = builder.SyntaxTree.AcceptVisitor(QuotationVisitor(m))
 
     
     let resolve (t : TypeReference) =
@@ -735,12 +728,16 @@ let main args =
     let argsMap = args |> List.map (fun a -> a.Name, a) |> Map.ofList
 
 
-    let exd, s = ex.run { arguments = argsMap; locals = Map.empty; declared = Map.empty }
+    let exd, s = ex.run { args = args; arguments = argsMap; locals = Map.empty  }
 
     let ex = exd []
     let ex2 = ex |> FSharp.removeImperativeReturn |> FSharp.removeRetFunctions
 
     printfn "%A" ex2
+
+
+    printfn "%A" (ex2.GetFreeVars() |> Set.ofSeq)
+
 //
 //    printfn "%A" b
 //
