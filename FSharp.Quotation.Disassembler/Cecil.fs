@@ -82,6 +82,7 @@ module Cecil =
 
     let fromAssembly (a : Assembly) =
         assemblyDefinitionCache.GetOrAdd(a, fun a ->
+            // TODO: find a better way of doing this (in-memory assemblies)
             AssemblyDefinition.ReadAssembly(a.Location)
         )
 

@@ -292,7 +292,7 @@ module Translation =
                             let! l = resolve l
                             let! v = translateExpression r
 
-                            let value = assignOp op l v
+                            let value = assignOp op (Expr.Var l) v
                             return Expr.VarSet(l, value)
 
                         | _ ->
