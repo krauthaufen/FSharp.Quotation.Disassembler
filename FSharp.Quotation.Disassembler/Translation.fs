@@ -16,7 +16,15 @@ module ExpressionExtensions =
     let private sub = methodInfo <@ (-) @>
     let private mul = methodInfo <@ (*) @>
     let private div = methodInfo <@ (/) @>
+    let private modulus = methodInfo <@ (%) @>
     let private negate = methodInfo <@ (~-) @>
+
+    let private leftShift = methodInfo <@ (<<<) @>
+    let private rightShift = methodInfo <@ (>>>) @>
+
+    let private bitAnd = methodInfo <@ (&&&) @>
+    let private bitOr = methodInfo <@ (|||) @>
+    let private bitXOr = methodInfo <@ (^^^) @>
 
     let private lt = methodInfo <@ (<) @>
     let private gt = methodInfo <@ (>) @>
@@ -40,6 +48,31 @@ module ExpressionExtensions =
 
         static member Divide(l : Expr, r : Expr) : Expr =
             let m = div.MakeGenericMethod [|l.Type; r.Type; r.Type|]
+            Expr.Call(m, [l;r])
+
+        static member Modulus(l : Expr, r : Expr) : Expr =
+            let m = modulus.MakeGenericMethod [|l.Type; r.Type; r.Type|]
+            Expr.Call(m, [l;r])
+
+
+        static member LeftShift(l : Expr, r : Expr) : Expr =
+            let m = leftShift.MakeGenericMethod [|l.Type|]
+            Expr.Call(m, [l;r])
+
+        static member RightShift(l : Expr, r : Expr) : Expr =
+            let m = rightShift.MakeGenericMethod [|l.Type|]
+            Expr.Call(m, [l;r])
+
+        static member BitwiseAnd(l : Expr, r: Expr) : Expr =
+            let m = bitAnd.MakeGenericMethod [|l.Type|]
+            Expr.Call(m, [l;r])
+
+        static member BitwiseOr(l : Expr, r: Expr) : Expr =
+            let m = bitOr.MakeGenericMethod [|l.Type|]
+            Expr.Call(m, [l;r])
+
+        static member BitwiseExclusiveOr(l : Expr, r: Expr) : Expr =
+            let m = bitXOr.MakeGenericMethod [|l.Type|]
             Expr.Call(m, [l;r])
 
         static member Negate(e : Expr) : Expr =
@@ -72,7 +105,8 @@ module ExpressionExtensions =
 
 
 module Translation =
-    
+    open System
+       
     let private resolve (n : string) =
         { run = fun s -> 
             match Map.tryFind n s.locals with
@@ -101,12 +135,24 @@ module Translation =
         }
 
 
-    let rec private binary (op : BinaryOperatorType) (l : Expr) (r : Expr) =
+    let private binary (op : BinaryOperatorType) (l : Expr) (r : Expr) =
         match op with
             | BinaryOperatorType.Add -> Expr.Add(l, r)
             | BinaryOperatorType.Subtract -> Expr.Subtract(l, r)
             | BinaryOperatorType.Multiply -> Expr.Multiply(l, r)
             | BinaryOperatorType.Divide -> Expr.Divide(l, r)
+            | BinaryOperatorType.Modulus -> Expr.Modulus(l, r)
+
+
+            | BinaryOperatorType.ShiftLeft -> Expr.LeftShift(l, r)
+            | BinaryOperatorType.ShiftRight -> Expr.RightShift(l, r)
+            | BinaryOperatorType.BitwiseAnd -> Expr.BitwiseAnd(l, r)
+            | BinaryOperatorType.BitwiseOr -> Expr.BitwiseOr(l, r)
+            | BinaryOperatorType.ExclusiveOr -> Expr.BitwiseExclusiveOr(l, r)
+
+
+            | BinaryOperatorType.ConditionalAnd -> <@@ %%l && %%r @@>
+            | BinaryOperatorType.ConditionalOr -> <@@ %%l || %%r @@>
 
             | BinaryOperatorType.LessThan -> Expr.LessThan(l, r)
             | BinaryOperatorType.GreaterThan -> Expr.GreaterThan(l, r)
@@ -115,28 +161,87 @@ module Translation =
             | BinaryOperatorType.Equality -> Expr.Equal(l, r)
             | BinaryOperatorType.InEquality -> Expr.NotEqual(l, r)
 
+            | BinaryOperatorType.NullCoalescing -> 
+                let check = Expr.Equal(l, Expr.Value(null, l.Type))
+                <@@ if %%check then %%l else %%r @@>
+
             | _ -> failwithf "unsupported operator %A" op
 
-    let private assignOp (op : AssignmentOperatorType) (l : Var) (r : Expr) =
+    let private assignOp (op : AssignmentOperatorType) (l : Expr) (r : Expr) =
         match op with
             | AssignmentOperatorType.Assign -> r
-            | AssignmentOperatorType.Add -> Expr.Add(Expr.Var l, r)
-            | AssignmentOperatorType.Subtract -> Expr.Subtract(Expr.Var l, r)
-            | AssignmentOperatorType.Multiply -> Expr.Multiply(Expr.Var l, r)
-            | AssignmentOperatorType.Divide -> Expr.Divide(Expr.Var l, r)
-            | _ -> failwith "not imp"
+            | AssignmentOperatorType.Add -> Expr.Add(l, r)
+            | AssignmentOperatorType.Subtract -> Expr.Subtract(l, r)
+            | AssignmentOperatorType.Multiply -> Expr.Multiply(l, r)
+            | AssignmentOperatorType.Divide -> Expr.Divide(l, r)
+            | AssignmentOperatorType.Modulus ->Expr.Modulus(l,r)
 
-    let rec private unary (op : UnaryOperatorType) (e : Expr)  =
+
+            | AssignmentOperatorType.BitwiseAnd -> Expr.BitwiseAnd(l, r)
+            | AssignmentOperatorType.BitwiseOr -> Expr.BitwiseOr(l, r)
+            | AssignmentOperatorType.ExclusiveOr -> Expr.BitwiseExclusiveOr(l, r)
+            
+            | AssignmentOperatorType.ShiftLeft -> Expr.LeftShift(l, r)
+            | AssignmentOperatorType.ShiftRight -> Expr.RightShift(l, r)
+
+            | _ -> failwithf "unsupported assignment-operator: %A" op
+
+    let private unary (op : UnaryOperatorType) (e : Expr)  =
         match op with
             | UnaryOperatorType.Not -> <@@ not %%e @@>
+
             | UnaryOperatorType.Minus -> Expr.Negate e
-            | _ -> failwithf "unsupported operator %A" op
+            | UnaryOperatorType.Plus -> e
+
+       
+
+            | _ -> failwithf "unsupported unary-operator %A" op
 
     let rec translateType (t : AstType) =
         match t with
             | :? PrimitiveType as p ->
                 match p.KnownTypeCode with
-                    | KnownTypeCode.Int32 -> typeof<int>
+                    | KnownTypeCode.Object -> typeof<Object>
+                    | KnownTypeCode.DBNull -> typeof<DBNull>
+                    | KnownTypeCode.Boolean -> typeof<Boolean>
+                    | KnownTypeCode.Char -> typeof<Char>
+                    | KnownTypeCode.SByte -> typeof<SByte>
+                    | KnownTypeCode.Byte -> typeof<Byte>
+                    | KnownTypeCode.Int16 -> typeof<Int16>
+                    | KnownTypeCode.UInt16 -> typeof<UInt16>
+                    | KnownTypeCode.Int32 -> typeof<Int32>
+                    | KnownTypeCode.UInt32 -> typeof<UInt32>
+                    | KnownTypeCode.Int64 -> typeof<Int64>
+                    | KnownTypeCode.UInt64 -> typeof<UInt64>
+                    | KnownTypeCode.Single -> typeof<Single>
+                    | KnownTypeCode.Double -> typeof<Double>
+                    | KnownTypeCode.Decimal -> typeof<Decimal>
+                    | KnownTypeCode.DateTime -> typeof<DateTime>
+                    | KnownTypeCode.String -> typeof<String>
+                    | KnownTypeCode.Void -> typeof<Void>
+                    | KnownTypeCode.Type -> typeof<Type>
+                    | KnownTypeCode.Array -> typeof<Array>
+                    | KnownTypeCode.Attribute -> typeof<Attribute>
+                    | KnownTypeCode.ValueType -> typeof<ValueType>
+                    | KnownTypeCode.Enum -> typeof<Enum>
+                    | KnownTypeCode.Delegate -> typeof<Delegate>
+                    | KnownTypeCode.MulticastDelegate -> typeof<MulticastDelegate>
+                    | KnownTypeCode.Exception -> typeof<Exception>
+                    | KnownTypeCode.IntPtr -> typeof<IntPtr>
+                    | KnownTypeCode.UIntPtr -> typeof<UIntPtr>
+                    | KnownTypeCode.IEnumerable -> typeof<System.Collections.IEnumerable>
+                    | KnownTypeCode.IEnumerator -> typeof<System.Collections.IEnumerator>
+                    | KnownTypeCode.IEnumerableOfT -> typedefof<System.Collections.Generic.IEnumerable<_>>
+                    | KnownTypeCode.IEnumeratorOfT -> typedefof<System.Collections.Generic.IEnumerator<_>>
+                    | KnownTypeCode.ICollection -> typeof<System.Collections.ICollection>
+                    | KnownTypeCode.ICollectionOfT -> typedefof<System.Collections.Generic.ICollection<_>>
+                    | KnownTypeCode.IList -> typeof<System.Collections.IList>
+                    | KnownTypeCode.IListOfT -> typedefof<System.Collections.Generic.IList<_>>
+                    | KnownTypeCode.IReadOnlyListOfT -> typedefof<System.Collections.Generic.IReadOnlyList<_>>
+                    | KnownTypeCode.Task -> typeof<System.Threading.Tasks.Task>
+                    | KnownTypeCode.TaskOfT -> typedefof<System.Threading.Tasks.Task<_>>
+                    | KnownTypeCode.NullableOfT -> typedefof<Nullable<_>>
+                    | KnownTypeCode.IDisposable -> typeof<IDisposable>
                     | _ -> failwith "asdasd"
 
             | :? SimpleType as s ->
