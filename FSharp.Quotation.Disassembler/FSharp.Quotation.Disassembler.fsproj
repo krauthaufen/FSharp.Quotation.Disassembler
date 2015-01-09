@@ -58,7 +58,9 @@
     <Compile Include="Patterns.fs" />
     <Compile Include="StateMonad.fs" />
     <Compile Include="TranslationMonad.fs" />
+    <Compile Include="ExpressionExtensions.fs" />
     <Compile Include="Translation.fs" />
+    <Compile Include="PrettyPrinting.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
   <ItemGroup>

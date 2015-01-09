@@ -67,7 +67,6 @@ namespace TestMethods.CSharp
             }
         }
 
-
         public static int Test5(List<int> l)
         {
             var sum = 0;
@@ -89,6 +88,11 @@ namespace TestMethods.CSharp
 
             add(a, b);
             return tup(d, d);
+        }
+
+        public static int Test7(int? a = null)
+        {
+            return a ?? 1;
         }
 
     }

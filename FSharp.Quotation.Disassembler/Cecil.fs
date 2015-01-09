@@ -25,7 +25,11 @@ module Cecil =
             ass.Modules |> Seq.find (fun mi -> mi.MetadataToken = m.MetadataToken.ToInt32())
         )
 
-    let toType (t : TypeReference) =
+    let toModule' (m : AssemblyNameReference) =
+        let ass = AppDomain.CurrentDomain.GetAssemblies() |> Seq.find (fun a -> a.FullName = m.FullName)
+        ass.Modules |> Seq.head
+
+    let rec toType (t : TypeReference) =
         match t.FullName with
             | "System.Object" -> typeof<Object>
             | "System.DBNull" -> typeof<DBNull>
@@ -61,8 +65,14 @@ module Cecil =
             | "System.Threading.Tasks.Task.Task" -> typeof<System.Threading.Tasks.Task>
             | "System.IDisposable" -> typeof<IDisposable>
             | _ -> 
-                let m = toModule t.Module
-                m.ResolveType(t.MetadataToken.ToInt32())
+                match t with
+                    | :? GenericInstanceType as g ->
+                        let t = toType g.ElementType
+                        let args = g.GenericArguments |> Seq.map toType |> Seq.toArray
+                        t.MakeGenericType args
+                    | _ ->
+                        let m = toModule t.Module
+                        m.ResolveType(t.MetadataToken.ToInt32())
 
     let toMethodInfo (mr : MethodReference) =
         let m = toModule mr.Module

@@ -10,298 +10,199 @@ open ICSharpCode.NRefactory.TypeSystem
 open Mono.Cecil
 open System.Reflection
 
-[<AutoOpen>]
-module ExpressionExtensions =
+module FSharp =
+    open Microsoft.FSharp.Quotations.Patterns
+    open Microsoft.FSharp.Quotations
+    open Microsoft.FSharp.Quotations.DerivedPatterns
+    open Microsoft.FSharp.Quotations.ExprShape
+    open Microsoft.FSharp.Reflection
 
-    let private add = methodInfo <@ (+) @>
-    let private sub = methodInfo <@ (-) @>
-    let private mul = methodInfo <@ (*) @>
-    let private div = methodInfo <@ (/) @>
-    let private modulus = methodInfo <@ (%) @>
-    let private negate = methodInfo <@ (~-) @>
+    let rec endsWithRet (e : Expr) =
+        match e with
+            | Let(v,e,b) ->
+                endsWithRet b
+            | Sequential(l, r) ->
+                endsWithRet r
+            | Return(v) ->
+                Some (v.Type)
+            | IfThenElse(_,l,r) ->
+                match endsWithRet l, endsWithRet r with
+                    | Some lt, Some rt when lt = rt ->
+                        Some lt
+                    | _ -> 
+                        None
+            | ShapeVar(v) -> None
+            | ShapeLambda(v, b) -> 
+                None
+            | ShapeCombination(o, args) -> 
+                None
 
-    let private leftShift = methodInfo <@ (<<<) @>
-    let private rightShift = methodInfo <@ (>>>) @>
+    let rec removeImperativeReturn(e : Expr) =
+        match e with
+            | Sequential(IfThenElse(cond, i', Value(:? unit,_)), e') ->
+                match endsWithRet i' with
+                    | Some _ ->
+                        Expr.IfThenElse(cond, removeImperativeReturn i', removeImperativeReturn e')
+                    | _ ->
+                        e
+            | Let(v,e,b) ->
+                Expr.Let(v, e, removeImperativeReturn b)
+            | Sequential(l, r) ->
+                Expr.Sequential(l, removeImperativeReturn r)
+            | ShapeLambda(v, b) ->
+                Expr.Lambda(v, removeImperativeReturn b)
+            | ShapeVar(v) ->
+                e
+            | ShapeCombination(o, args) ->
+                RebuildShapeCombination(o, args |> List.map removeImperativeReturn)
 
-    let private bitAnd = methodInfo <@ (&&&) @>
-    let private bitOr = methodInfo <@ (|||) @>
-    let private bitXOr = methodInfo <@ (^^^) @>
+    let rec removeRetFunctions (e : Expr) =
+        match e with
+            | Return(v) -> v
+            | Let(v,e,b) ->
+                Expr.Let(v, e, removeRetFunctions b)
+            | Sequential(l, r) ->
+                Expr.Sequential(removeRetFunctions l, removeRetFunctions r)
+            | ShapeLambda(v,b) ->
+                Expr.Lambda(v, removeRetFunctions b)
+            | ShapeVar(_) -> e
+            | IfThenElse(c, i, e) ->
+                let i = removeRetFunctions i
+                let e = removeRetFunctions e
+                Expr.IfThenElse(c, i, e)
+            | ShapeCombination(o, args) -> RebuildShapeCombination(o, args |> List.map removeRetFunctions)
 
-    let private lt = methodInfo <@ (<) @>
-    let private gt = methodInfo <@ (>) @>
-    let private leq = methodInfo <@ (<=) @>
-    let private geq = methodInfo <@ (>=) @>
-    let private eq = methodInfo <@ (=) @>
-    let private neq = methodInfo <@ (<>) @>
-    
-    let private emptyArray = [||]
-    let private getArray = methodInfo <@ emptyArray.[0] @>
+    let rec liftUnionConstructors (e : Expr) =
+        match e with
+            | PropertyGet(None, p, []) ->
+                let case = FSharpType.GetUnionCases(p.DeclaringType) |> Seq.tryFind (fun c -> c.Name = p.Name)
+                match case with
+                    | Some case -> Expr.NewUnionCase(case, [])
+                    | None -> e
 
-    let private empty = Expr.Value(())
+            | Call(None, mi, args) when FSharpType.IsUnion(mi.DeclaringType) ->
+                let case = FSharpType.GetUnionCases(mi.DeclaringType) |> Seq.tryFind (fun c -> c.Name = mi.Name)
+                match case with
+                    | Some case -> Expr.NewUnionCase(case, args |> List.map liftUnionConstructors)
+                    | None -> Expr.Call(mi, args |> List.map liftUnionConstructors)
 
-    let (|Empty|_|) (e : Expr) =
-        if e = empty then
-            Some Empty
-        else
-            None
+            | Value(null, t) when FSharpType.IsUnion t ->
+                let emptyCase = FSharpType.GetUnionCases t |> Seq.find (fun c -> c.GetFields().Length = 0)
+                Expr.NewUnionCase(emptyCase, [])
 
-    type Expr with
+            | FieldGet(Some (Coerce(value, tu)), f) when tu.IsNested && FSharpType.IsUnion tu.DeclaringType ->
+                let case = FSharpType.GetUnionCases tu.DeclaringType |> Seq.find (fun c -> c.Name = tu.Name)
+                let fields = case.GetFields()
 
-        static member Empty =
-            empty
+                if f.Name = "item" then
+                    Expr.PropertyGet(value, fields.[0])
+                else
+                    let index = (f.Name.Substring 4 |> System.Int32.Parse) - 1
+                    Expr.PropertyGet(value, fields.[index])
 
-        static member Add(l : Expr, r : Expr) : Expr =
-            let m = add.MakeGenericMethod [|l.Type; r.Type; r.Type|]
-            Expr.Call(m, [l;r])
+            | ShapeLambda(v,b) -> Expr.Lambda(v, liftUnionConstructors b)
+            | ShapeVar(_) -> e
+            | ShapeCombination(o, args) -> RebuildShapeCombination(o, args |> List.map liftUnionConstructors)
 
-        static member Subtract(l : Expr, r : Expr) : Expr =
-            let m = sub.MakeGenericMethod [|l.Type; r.Type; r.Type|]
-            Expr.Call(m, [l;r])
+    let pushDefaultValueLets (e : Expr) =
+            
+        let rec buildDefaultLets (vars : list<Var>) (e : Expr) =
+            match vars with
+                | [] -> e
+                | v::vars -> Expr.Let(v, Expr.DefaultValue(v.Type), buildDefaultLets vars e)
 
-        static member Multiply(l : Expr, r : Expr) : Expr =
-            let m = mul.MakeGenericMethod [|l.Type; r.Type; r.Type|]
-            Expr.Call(m, [l;r])
-
-        static member Divide(l : Expr, r : Expr) : Expr =
-            let m = div.MakeGenericMethod [|l.Type; r.Type; r.Type|]
-            Expr.Call(m, [l;r])
-
-        static member Modulus(l : Expr, r : Expr) : Expr =
-            let m = modulus.MakeGenericMethod [|l.Type; r.Type; r.Type|]
-            Expr.Call(m, [l;r])
-
-
-        static member LeftShift(l : Expr, r : Expr) : Expr =
-            let m = leftShift.MakeGenericMethod [|l.Type|]
-            Expr.Call(m, [l;r])
-
-        static member RightShift(l : Expr, r : Expr) : Expr =
-            let m = rightShift.MakeGenericMethod [|l.Type|]
-            Expr.Call(m, [l;r])
-
-        static member BitwiseAnd(l : Expr, r: Expr) : Expr =
-            let m = bitAnd.MakeGenericMethod [|l.Type|]
-            Expr.Call(m, [l;r])
-
-        static member BitwiseOr(l : Expr, r: Expr) : Expr =
-            let m = bitOr.MakeGenericMethod [|l.Type|]
-            Expr.Call(m, [l;r])
-
-        static member BitwiseExclusiveOr(l : Expr, r: Expr) : Expr =
-            let m = bitXOr.MakeGenericMethod [|l.Type|]
-            Expr.Call(m, [l;r])
-
-        static member Negate(e : Expr) : Expr =
-            let m = negate.MakeGenericMethod [|e.Type|]
-            Expr.Call(m, [e])
-
-        static member LessThan(l : Expr, r : Expr) : Expr =
-            let m = lt.MakeGenericMethod [|l.Type|]
-            Expr.Call(m, [l;r])
-
-        static member GreaterThan(l : Expr, r : Expr) : Expr =
-            let m = gt.MakeGenericMethod [|l.Type|]
-            Expr.Call(m, [l;r])
-
-        static member GreaterOrEqual(l : Expr, r : Expr) : Expr =
-            let m = geq.MakeGenericMethod [|l.Type|]
-            Expr.Call(m, [l;r])
-
-        static member LessOrEqual(l : Expr, r : Expr) : Expr =
-            let m = leq.MakeGenericMethod [|l.Type|]
-            Expr.Call(m, [l;r])
-
-        static member Equal(l : Expr, r : Expr) : Expr =
-            let m = eq.MakeGenericMethod [|l.Type|]
-            Expr.Call(m, [l;r])
-
-        static member NotEqual(l : Expr, r : Expr) : Expr =
-            let m = neq.MakeGenericMethod [|l.Type|]
-            Expr.Call(m, [l;r])
-
-        static member ForEach(v : Var, seq : Expr, body : Expr) =
-            let sType = typeof<System.Collections.Generic.IEnumerable<obj>>.GetGenericTypeDefinition().MakeGenericType([|v.Type|])
-            let eType = typeof<System.Collections.Generic.IEnumerator<obj>>.GetGenericTypeDefinition().MakeGenericType([|v.Type|])
-            let e = Var("enumerator", eType)
-
-            let intrinsics = getArray.DeclaringType
-            let unboxDisposable = intrinsics.GetMethod("UnboxGeneric").MakeGenericMethod([|typeof<System.IDisposable>|])
-
-            let getEnumerator = sType.GetMethod("GetEnumerator")
-            let dispose = typeof<System.IDisposable>.GetMethod("Dispose")
-            let moveNext = typeof<System.Collections.IEnumerator>.GetMethod("MoveNext")
-
-            Expr.Let(e, Expr.Call(Expr.Coerce(seq, sType), getEnumerator, []),
-                Expr.TryFinally(
-                    Expr.WhileLoop(Expr.Call(Expr.Var e, moveNext, []),
-                        Expr.Let(v, Expr.PropertyGet(Expr.Var e, eType.GetProperty("Current"), []),
-                            body
-                        )
-                    ),
-                    Expr.IfThenElse(Expr.TypeTest(Expr.Coerce(Expr.Var e, typeof<obj>), typeof<System.IDisposable>),
-                        Expr.Call(Expr.Call(unboxDisposable, [Expr.Coerce(Expr.Var e, typeof<obj>)]), dispose, []),
-                        Expr.Value(())
-                    )
-                )
-            )
-
-
-    [<AutoOpen>]
-    module Patterns =
-        let (|Add|_|) (e : Expr) =
+        let rec push (lets : Set<Var>) (e : Expr) =
             match e with
-                | Call(None, mi, [l;r]) when mi.IsGenericMethod && mi.GetGenericMethodDefinition() = add ->
-                    Some (l,r)
-                | _ ->
-                    None
+                | Let(v, DefaultValue(_), e) ->
+                    push (Set.add v lets) e
 
-        let (|Subtract|_|) (e : Expr) =
+                | Sequential(Sequential(s0, s1), s2) ->
+                    Expr.Seq(s0, Expr.Seq(s1, s2)) |> push lets
+
+                | Sequential(VarSet(v, e), r) when Set.contains v lets ->
+                    Expr.Let(v,e, push (Set.remove v lets) r)
+
+                | ShapeVar(v) ->
+                    if Set.contains v lets then
+                        failwithf "use of unassigned local variable: %A" v
+                    else
+                        e
+
+
+                | ShapeLambda(v, b) ->
+                    let intersection = e.GetFreeVars() |> Set.ofSeq |> Set.intersect lets
+
+                    if Set.isEmpty intersection then
+                        Expr.Lambda(v, push Set.empty b)
+                    else
+                        failwithf "unassigned variables are part of closure: %A" intersection
+
+
+
+                | Sequential(l, r) ->
+                    let usedByLeft = l.GetFreeVars() |> Set.ofSeq |> Set.intersect lets
+                    let usedByRight = r.GetFreeVars() |> Set.ofSeq |> Set.intersect lets
+                    let usedByBoth = Set.intersect usedByLeft usedByRight
+                        
+                    let usedByLeft = Set.difference usedByLeft usedByBoth
+                    let usedByRight = Set.difference usedByRight usedByBoth 
+
+                    let res = Expr.Sequential(push usedByLeft l, push usedByRight r)
+                    buildDefaultLets (usedByBoth |> Set.toList) res
+
+
+                | ShapeCombination(o, args) ->
+                    let res = RebuildShapeCombination(o, args |> List.map (push Set.empty))
+                    buildDefaultLets (lets |> Seq.toList) res
+
+        push Set.empty e
+
+    let adjustMutableVariables (e : Expr) =
+        let rec getMutableVariables (e : Expr) =
             match e with
-                | Call(None, mi, [l;r]) when mi.IsGenericMethod && mi.GetGenericMethodDefinition() = sub ->
-                    Some (l,r)
-                | _ ->
-                    None
+                | VarSet(v, e) ->
+                    let inner = getMutableVariables e
+                    Set.add v inner 
+                | ShapeLambda(v,b) -> getMutableVariables b
+                | ShapeVar(_) -> Set.empty
+                | ShapeCombination(o, args) -> args |> List.fold (fun s e -> Set.union s (getMutableVariables e)) Set.empty
 
-        let (|Multiply|_|) (e : Expr) =
+        let rec substitute (m : Map<Var, Var>) (e : Expr) =
             match e with
-                | Call(None, mi, [l;r]) when mi.IsGenericMethod && mi.GetGenericMethodDefinition() = mul ->
-                    Some (l,r)
-                | _ ->
-                    None
+                | Let(v, e, b) ->
+                    let v =
+                        match Map.tryFind v m with
+                            | Some v -> v
+                            | None -> v
+                    Expr.Let(v, substitute m e, substitute m b)
 
-        let (|Divide|_|) (e : Expr) =
-            match e with
-                | Call(None, mi, [l;r]) when mi.IsGenericMethod && mi.GetGenericMethodDefinition() = div ->
-                    Some (l,r)
-                | _ ->
-                    None
+                | ShapeLambda(v,b) -> Expr.Lambda(v, substitute m b)
+                | ShapeVar(v) ->
+                    match Map.tryFind v m with
+                        | Some m -> Expr.Var m
+                        | None -> e
+                | ShapeCombination(o, args) ->
+                    RebuildShapeCombination(o, args |> List.map (substitute m))
 
-        let (|Modulus|_|) (e : Expr) =
-            match e with
-                | Call(None, mi, [l;r]) when mi.IsGenericMethod && mi.GetGenericMethodDefinition() = modulus ->
-                    Some (l,r)
-                | _ ->
-                    None
+        let mutables = getMutableVariables e
+        let mapping = mutables |> Seq.map (fun v -> v, Var(v.Name, v.Type, true)) |> Map.ofSeq
+        substitute mapping e
 
-        let (|Negate|_|) (e : Expr) =
-            match e with
-                | Call(None, mi, [l]) when mi.IsGenericMethod && mi.GetGenericMethodDefinition() = negate ->
-                    Some (l)
-                | _ ->
-                    None
+    let rec flipNegativeIfThenElses (e : Expr) =
+        match e with
+            | ShapeLambda(v,b) -> Expr.Lambda(v, flipNegativeIfThenElses b)
+            | ShapeVar(_) -> e
+            | IfThenElse(Not c, i, e) -> Expr.IfThenElse(c, e, i) |> flipNegativeIfThenElses
+            | ShapeCombination(o, args) -> RebuildShapeCombination(o, args |> List.map flipNegativeIfThenElses)
 
-        let (|LeftShift|_|) (e : Expr) =
-            match e with
-                | Call(None, mi, [l;r]) when mi.IsGenericMethod && mi.GetGenericMethodDefinition() = leftShift ->
-                    Some (l,r)
-                | _ ->
-                    None
-
-        let (|RightShift|_|) (e : Expr) =
-            match e with
-                | Call(None, mi, [l;r]) when mi.IsGenericMethod && mi.GetGenericMethodDefinition() = rightShift ->
-                    Some (l,r)
-                | _ ->
-                    None
-
-
-        let (|BitwiseAnd|_|) (e : Expr) =
-            match e with
-                | Call(None, mi, [l;r]) when mi.IsGenericMethod && mi.GetGenericMethodDefinition() = bitAnd ->
-                    Some (l,r)
-                | _ ->
-                    None
-
-        let (|BitwiseOr|_|) (e : Expr) =
-            match e with
-                | Call(None, mi, [l;r]) when mi.IsGenericMethod && mi.GetGenericMethodDefinition() = bitOr ->
-                    Some (l,r)
-                | _ ->
-                    None
-
-        let (|BitwiseExclusiveOr|_|) (e : Expr) =
-            match e with
-                | Call(None, mi, [l;r]) when mi.IsGenericMethod && mi.GetGenericMethodDefinition() = bitXOr ->
-                    Some (l,r)
-                | _ ->
-                    None
-
-        let (|SmallerThan|_|) (e : Expr) =
-            match e with
-                | Call(None, mi, [l;r]) when mi.IsGenericMethod && mi.GetGenericMethodDefinition() = lt ->
-                    Some (l,r)
-                | _ ->
-                    None
-
-        let (|GreaterThan|_|) (e : Expr) =
-            match e with
-                | Call(None, mi, [l;r]) when mi.IsGenericMethod && mi.GetGenericMethodDefinition() = gt ->
-                    Some (l,r)
-                | _ ->
-                    None
-
-        let (|SmallerOrEqual|_|) (e : Expr) =
-            match e with
-                | Call(None, mi, [l;r]) when mi.IsGenericMethod && mi.GetGenericMethodDefinition() = leq ->
-                    Some (l,r)
-                | _ ->
-                    None
-
-        let (|GreaterOrEqual|_|) (e : Expr) =
-            match e with
-                | Call(None, mi, [l;r]) when mi.IsGenericMethod && mi.GetGenericMethodDefinition() = geq ->
-                    Some (l,r)
-                | _ ->
-                    None
-
-        let (|Equality|_|) (e : Expr) =
-            match e with
-                | Call(None, mi, [l;r]) when mi.IsGenericMethod && mi.GetGenericMethodDefinition() = eq ->
-                    Some (l,r)
-                | _ ->
-                    None
-
-        let (|InEquality|_|) (e : Expr) =
-            match e with
-                | Call(None, mi, [l;r]) when mi.IsGenericMethod && mi.GetGenericMethodDefinition() = neq ->
-                    Some (l,r)
-                | _ ->
-                    None
-
-
-        let private typePrefixPattern = System.Text.RegularExpressions.Regex @"^.*\.(?<methodName>.*)$"
-        let private (|Method|_|)  (mi : MethodInfo) =
-            let args = mi.GetParameters() |> Seq.map(fun p -> p.ParameterType)
-            let parameters = if mi.IsStatic then
-                                args
-                                else
-                                seq { yield mi.DeclaringType; yield! args }
-
-            let m = typePrefixPattern.Match mi.Name
-            let name =
-                if m.Success then m.Groups.["methodName"].Value
-                else mi.Name
-
-            Method (name, parameters |> Seq.toList) |> Some
-
-
-        let (|ForEach|_|) (e : Expr) =
-            match e with
-                | Let(e, Call(Some(Coerce(seq,_)), Method("GetEnumerator",_), []),
-                        TryFinally(
-                            WhileLoop(Call(Some (Var e1), Method("MoveNext",_), []),
-                                Let(i, PropertyGet(Some (Var e2), current, []), b)
-                            ),
-                            IfThenElse(TypeTest(Coerce(Var e3, oType0), dType),
-                                Call(Some (Call(None, Method("UnboxGeneric",_), [Coerce(e4, oType1)])), Method("Dispose",_), []),
-                                Value(_)
-                            )
-                        )
-                    ) when e1 = e && e2 = e && e3 = e && current.Name = "Current" && oType0 = typeof<obj> && oType1 = typeof<obj> && dType = typeof<System.IDisposable> ->
-                    ForEach(i, seq, b) |> Some
-                | _ -> None
-
-
+    let prepare (e : Expr) =
+        e |> liftUnionConstructors
+          |> pushDefaultValueLets 
+          |> adjustMutableVariables
+          |> removeImperativeReturn 
+          |> removeRetFunctions 
+          |> flipNegativeIfThenElses
+              
 
 module Translation =
     open System
@@ -376,9 +277,18 @@ module Translation =
             | BinaryOperatorType.Equality -> Expr.Equal(l, r)
             | BinaryOperatorType.InEquality -> Expr.NotEqual(l, r)
 
-            | BinaryOperatorType.NullCoalescing -> 
-                let check = Expr.Equal(l, Expr.Value(null, l.Type))
-                <@@ if %%check then %%l else %%r @@>
+            | BinaryOperatorType.NullCoalescing ->
+                
+                if l.Type.IsGenericType && l.Type.GetGenericTypeDefinition() = typedefof<Nullable<_>> then
+                    let valueProp = l.Type.GetProperty("Value")
+                    let hasValueProp = l.Type.GetProperty("HasValue")
+                    
+                    let check = Expr.PropertyGet(l, hasValueProp)
+                    Expr.IfThenElse(check, Expr.PropertyGet(l, valueProp), r)
+                else
+                    let check = Expr.Equal(l, Expr.Value(null, l.Type))
+
+                    Expr.IfThenElse(check, l, r)
 
             | _ -> failwithf "unsupported operator %A" op
 
@@ -412,7 +322,7 @@ module Translation =
 
             | _ -> failwithf "unsupported unary-operator %A" op
 
-    let rec translateType (t : AstType) =
+    let rec private translateType (t : AstType) =
         match t with
             | :? PrimitiveType as p ->
                 match p.KnownTypeCode with
@@ -469,9 +379,16 @@ module Translation =
                 else
                     res
 
+            | :? ComposedType as c ->
+                let t = translateType c.BaseType
+                if c.HasNullableSpecifier then
+                    typedefof<Nullable<_>>.MakeGenericType [|t|]
+                else
+                    t
 
             | _ ->
                 let ta = t.Annotation<TypeReference>()
+           
                 let res = Cecil.toType ta
 
                 if res.IsGenericType && ta.IsGenericInstance then
@@ -480,95 +397,45 @@ module Translation =
                 else
                     res
 
+    let private translateConversion =
+        let sbyteCast = methodInfo <@ sbyte @>
+        let byteCast = methodInfo <@ byte @>
+        let int16Cast = methodInfo <@ int16 @>
+        let uint16Cast = methodInfo <@ uint16 @>
+        let intCast = methodInfo <@ int @>
+        let uint32Cast = methodInfo <@ uint32 @>
+        let int64Cast = methodInfo <@ int64 @>
+        let uint64Cast = methodInfo <@ uint64 @>
+        let nativeintCast = methodInfo <@ nativeint @>
+        let unativeintCast = methodInfo <@ unativeint @>
 
-    module FSharp =
-        open Microsoft.FSharp.Quotations.Patterns
-        open Microsoft.FSharp.Quotations
-        open Microsoft.FSharp.Quotations.DerivedPatterns
-        open Microsoft.FSharp.Quotations.ExprShape
-        open Microsoft.FSharp.Reflection
+        let float32Cast = methodInfo <@ float32 @> 
+        let floatCast = methodInfo <@ float @> 
+        let decimalCast = methodInfo <@ decimal @>
 
-        let rec endsWithRet (e : Expr) =
-            match e with
-                | Let(v,e,b) ->
-                    endsWithRet b
-                | Sequential(l, r) ->
-                    endsWithRet r
-                | Return(v) ->
-                    Some (v.Type)
-                | IfThenElse(_,l,r) ->
-                    match endsWithRet l, endsWithRet r with
-                        | Some lt, Some rt when lt = rt ->
-                            Some lt
-                        | _ -> 
-                            None
-                | ShapeVar(v) -> None
-                | ShapeLambda(v, b) -> 
-                    None
-                | ShapeCombination(o, args) -> 
-                    None
+        fun (tin : Type) (tout : Type) ->
+            if tout = typeof<sbyte> then floatCast.MakeGenericMethod [|tin|]
+            elif tout = typeof<byte> then byteCast.MakeGenericMethod [|tin|]
+            elif tout = typeof<int16> then int16Cast.MakeGenericMethod [|tin|]
+            elif tout = typeof<uint16> then uint16Cast.MakeGenericMethod [|tin|]
+            elif tout = typeof<int> then intCast.MakeGenericMethod [|tin|]
+            elif tout = typeof<uint32> then uint32Cast.MakeGenericMethod [|tin|]
+            elif tout = typeof<int64> then int64Cast.MakeGenericMethod [|tin|]
+            elif tout = typeof<uint64> then uint64Cast.MakeGenericMethod [|tin|]
+            elif tout = typeof<nativeint> then nativeintCast.MakeGenericMethod [|tin|]
+            elif tout = typeof<unativeint> then unativeintCast.MakeGenericMethod [|tin|]
+            elif tout = typeof<float32> then float32Cast.MakeGenericMethod [|tin|]
+            elif tout = typeof<float> then floatCast.MakeGenericMethod [|tin|]
+            elif tout = typeof<decimal> then decimalCast.MakeGenericMethod [|tin|]
+            else failwithf "unsupported conversion from %A to %A" tin tout
 
-        let rec removeImperativeReturn(e : Expr) =
-            match e with
-                | Sequential(IfThenElse(cond, i', Value(:? unit,_)), e') ->
-                    match endsWithRet i' with
-                        | Some _ ->
-                            Expr.IfThenElse(cond, removeImperativeReturn i', removeImperativeReturn e')
-                        | _ ->
-                            e
-                | Let(v,e,b) ->
-                    Expr.Let(v, e, removeImperativeReturn b)
-                | Sequential(l, r) ->
-                    Expr.Sequential(l, removeImperativeReturn r)
-                | ShapeLambda(v, b) ->
-                    Expr.Lambda(v, removeImperativeReturn b)
-                | ShapeVar(v) ->
-                    e
-                | ShapeCombination(o, args) ->
-                    RebuildShapeCombination(o, args |> List.map removeImperativeReturn)
 
-        let rec removeRetFunctions (e : Expr) =
-            match e with
-                | Return(v) -> v
-                | Let(v,e,b) ->
-                    Expr.Let(v, e, removeRetFunctions b)
-                | Sequential(l, r) ->
-                    Expr.Sequential(removeRetFunctions l, removeRetFunctions r)
-                | ShapeLambda(v,b) ->
-                    Expr.Lambda(v, removeRetFunctions b)
-                | ShapeVar(_) -> e
-                | ShapeCombination(o, args) -> RebuildShapeCombination(o, args |> List.map removeRetFunctions)
 
-        let rec liftUnionConstructors (e : Expr) =
-            match e with
-                | PropertyGet(None, p, []) ->
-                    let case = FSharpType.GetUnionCases(p.DeclaringType) |> Seq.tryFind (fun c -> c.Name = p.Name)
-                    match case with
-                        | Some case -> Expr.NewUnionCase(case, [])
-                        | None -> e
-
-                | Call(None, mi, args) when FSharpType.IsUnion(mi.DeclaringType) ->
-                    let case = FSharpType.GetUnionCases(mi.DeclaringType) |> Seq.tryFind (fun c -> c.Name = mi.Name)
-                    match case with
-                        | Some case -> Expr.NewUnionCase(case, args |> List.map liftUnionConstructors)
-                        | None -> Expr.Call(mi, args |> List.map liftUnionConstructors)
-
-                | Value(null, t) when FSharpType.IsUnion t ->
-                    let emptyCase = FSharpType.GetUnionCases t |> Seq.find (fun c -> c.GetFields().Length = 0)
-                    Expr.NewUnionCase(emptyCase, [])
-
-                | ShapeLambda(v,b) -> Expr.Lambda(v, liftUnionConstructors b)
-                | ShapeVar(_) -> e
-                | ShapeCombination(o, args) -> RebuildShapeCombination(o, args |> List.map liftUnionConstructors)
-
-        let prepare (e : Expr) =
-            e |> liftUnionConstructors|> removeImperativeReturn |> removeRetFunctions
 
 
     // TODO:
     //  + indexed properties
     //  + array-access stuff
-    //  + pattern matching
     let rec translateExpression (e : Expression) : Trans<Expr> =
         state {
             match e with
@@ -618,12 +485,31 @@ module Translation =
                     let! t = translateExpression t
                     let! f = translateExpression f
 
-                    return Expr.IfThenElse(cond, t, f)
+                    match cond with
+                        | Not cond ->
+                            return Expr.IfThenElse(cond, f, t)
+                        | _ ->
+                            return Expr.IfThenElse(cond, t, f)
+
 
                 | NullExpression ->
                     match e.Parent with
                         | ReturnStatement(_) ->
                             let! t = getReturnType
+                            return Expr.Value(null, t)
+                        | Expression(BinaryOperator((BinaryOperatorType.Equality | BinaryOperatorType.InEquality), l,r)) ->
+                            let ta = 
+                                if l = e then r
+                                else l
+
+                            let ti = ta.Annotation<TypeInformation>()
+                            let vi = ta.Annotation<ICSharpCode.Decompiler.ILAst.ILVariable>()
+
+                            let t = 
+                                if ti <> null then ti.InferredType |> Cecil.toType
+                                elif vi <> null then vi.Type |> Cecil.toType
+                                else failwith "could not determine type for null-expression"
+
                             return Expr.Value(null, t)
                         | _ ->
                             let t = e.Annotation<TypeInformation>().InferredType |> Cecil.toType
@@ -713,7 +599,28 @@ module Translation =
                 | CastExpression(t, e) ->
                     let! e = translateExpression e
                     let t = translateType t
-                    return Expr.Coerce(e, t)
+
+                    if t.IsAssignableFrom e.Type then
+                        return Expr.Coerce(e, t)
+                    elif FSharpType.IsUnion e.Type && t.IsNested && t.DeclaringType = e.Type then
+                        return Expr.Coerce(e, t)
+                    elif e.Type.IsAssignableFrom t then
+                        return Expr.Unbox(e, t)
+                    else
+                        let tImp = t.GetMethod("op_Implicit", [|e.Type; t|])
+                        let eImp = e.Type.GetMethod("op_Implicit", [|e.Type; t|])
+
+                        let tExp = t.GetMethod("op_Explicit", [|e.Type; t|])
+                        let eExp = e.Type.GetMethod("op_Explicit", [|e.Type; t|])
+
+                        let conversion = 
+                            if tImp <> null then tImp
+                            elif eImp <> null then eImp
+                            elif tExp <> null then tExp
+                            elif eExp <> null then eExp
+                            else translateConversion e.Type t
+
+                        return Expr.Call(conversion, [e])
 
                 | LambdaExpression(args, body) ->
                     let vars = args |> List.map(fun a -> Var(a.Name, translateType a.Type))
@@ -741,6 +648,16 @@ module Translation =
 
                     return Expr.Applications(l, args |> List.map (fun a -> [a]))
 
+                | TypeTestExpression(t, e) ->
+                    let t = translateType t
+                    let! e = translateExpression e
+
+                    if t.IsNested && FSharpType.IsUnion t.DeclaringType then
+                        let n = t.Name
+                        let case = FSharpType.GetUnionCases t.DeclaringType |> Seq.find (fun c -> c.Name = n)
+                        return Expr.UnionCaseTest(e, case)
+                    else
+                        return failwith "type-tests not implemented"
 
                 | e when e.IsNull ->
                     return Expr.Value(())
@@ -918,8 +835,11 @@ module Translation =
                     let! s = push [v]
                     let! rest = translateStatements rest
                     do! pop s
-
-                    return Expr.Let(v, value, rest)
+                    if t.IsNested && FSharpType.IsUnion t.DeclaringType then
+                        let rest = rest.Substitute(fun vi -> if vi = v then Some value else None)
+                        return rest
+                    else
+                        return Expr.Let(v, value, rest)
                     
                 | WhileStatement(cond, body)::rest ->
                     let! cond = translateExpression cond

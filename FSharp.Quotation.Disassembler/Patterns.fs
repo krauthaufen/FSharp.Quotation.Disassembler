@@ -179,6 +179,13 @@ module Patterns =
                 Some (CastExpression(e.Type, e.Expression))
             | _ ->
                 None
+
+    let (|TypeTestExpression|_|) (e : Expression) =
+        match e with
+            | :? IsExpression as e ->
+                Some (TypeTestExpression(e.Type, e.Expression))
+            | _ ->
+                None
                 
 
     let (|LambdaExpression|_|) (e : Expression) =
