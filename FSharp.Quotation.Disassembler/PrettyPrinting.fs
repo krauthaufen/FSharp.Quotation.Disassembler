@@ -75,6 +75,11 @@ module PrettyPrint =
                     let a = typeStr a
                     let v = typeStr v
                     sprintf "%s -> %s" a v
+                elif t.IsArray then
+                    let rank = t.GetArrayRank()
+                    let m = Array.create rank "" |> String.concat "," |> sprintf "[%s]"
+                    let b = typeStr (t.GetElementType())
+                    sprintf "%s%s" b m
                 else
                     if t.IsGenericType then
                         if t.IsGenericTypeDefinition then
@@ -114,6 +119,10 @@ module PrettyPrint =
                     sprintf "let %s%s = %s\r\n%s" mut v.Name e b
                 else
                     sprintf "let %s%s =\r\n%s\r\n%s" mut v.Name (String.indent e) b
+
+            | Value(:? Type as t, _) ->
+                sprintf "typeof<%s>" (typeStr t)
+
             | Value(v,_) ->
                 if v = null then "null"
                 else sprintf "%A" v
@@ -141,6 +150,17 @@ module PrettyPrint =
             | InEquality(l,r) -> sprintf "%s <> %s" (str l) (str r)
 
             | Not(e) -> sprintf "not <| %s" (str e)
+
+            | ArrayGet(arr, index) ->
+                let index = index |> List.map str |> String.concat ","
+                let arr = str arr
+                sprintf "%s.[%s]" arr index
+
+            | ArraySet(arr, index, value) ->
+                let index = index |> List.map str |> String.concat ","
+                let arr = str arr
+                let value = str value
+                sprintf "%s.[%s] <- %s" arr index value
 
             | Call(t, mi, args) ->
                 let args = args |> List.map str
@@ -211,6 +231,10 @@ module PrettyPrint =
                             sprintf "%s.[%s]" t index
                         else
                             sprintf "%s.%s[%s]" t p.Name index
+
+            | PropertySet(t, p, index, value) ->
+                let get = str (match t with | Some t -> Expr.PropertyGet(t, p, index) | _ -> Expr.PropertyGet(p, index))
+                sprintf "%s <- %s" get (str value)
 
             | MultiArgLambda(v, b) ->
                 let b = str b |> String.indent

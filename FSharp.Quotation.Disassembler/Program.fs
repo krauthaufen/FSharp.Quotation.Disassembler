@@ -48,9 +48,21 @@ type Test() =
             v <- v + a
         v
 
+    static member Array (a : float[]) =
+        a.[1] <- 10.0
+        a.[1]
+
+    static member List (a : System.Collections.Generic.List<float>) =
+        a.[1] <- 10.0
+        a.[1]
+
+    static member Ref (a : ref<int>) =
+        a.Value <- 9
+        System.Activator.CreateInstance(typeof<int>)
+
 [<EntryPoint>]
 let main args =
-    let mi = typeof<Test>.GetMethod "Matching"
+    let mi = typeof<Test>.GetMethod "Ref"
     let meth = Cecil.disassemble mi
 
     let ex = Translation.translateMethodDeclaration meth

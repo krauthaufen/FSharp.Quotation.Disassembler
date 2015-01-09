@@ -383,6 +383,14 @@ module Translation =
                 let t = translateType c.BaseType
                 if c.HasNullableSpecifier then
                     typedefof<Nullable<_>>.MakeGenericType [|t|]
+                elif c.ArraySpecifiers.Count > 0 then
+                    let mutable result = t
+                    for s in c.ArraySpecifiers do
+                        if s.Dimensions = 1 then
+                            result <- result.MakeArrayType()
+                        else
+                            result <- result.MakeArrayType(s.Dimensions)
+                    result
                 else
                     t
 
@@ -456,14 +464,49 @@ module Translation =
                     return Expr.Var v
 
                 | Assignment(op, l, r) ->
+                    let! v = translateExpression r
+
                     match l with
                         | Identifier(l) ->
                             let! l = resolve l
-                            let! v = translateExpression r
+                            
 
                             let value = assignOp op (Expr.Var l) v
                             return Expr.VarSet(l, value)
 
+                        | IndexerExpression(target, index) ->
+                            let! target = translateExpression target
+                            let! index = translateExpressions index
+
+                            if target.Type.IsArray then
+                                return Expr.ArraySet(target, index, v)
+                            else
+                                let item = target.Type.GetProperty("Item")
+                                if item <> null then
+                                    return Expr.PropertySet(target, item, v, index)
+                                else
+                                    return failwithf "invalid indexer-expression: %A" e
+
+                        | MemberReference(target, name) ->
+                            match target with
+                                | :? TypeReferenceExpression as t ->
+                                    let t = translateType t.Type
+                                    let f = t.GetField(name, BindingFlags.Instance ||| BindingFlags.NonPublic ||| BindingFlags.Public)
+                                    let p = t.GetProperty(name, BindingFlags.Instance ||| BindingFlags.NonPublic ||| BindingFlags.Public)
+
+                                    if f <> null then return Expr.FieldSet(f, v)
+                                    elif p <> null then return Expr.PropertySet(p, v, [])
+                                    else return failwithf "invalid static field/property: %A" name
+
+                                | _ ->
+                                    let! target = translateExpression target
+
+                                    let f = target.Type.GetField(name, BindingFlags.Instance ||| BindingFlags.NonPublic ||| BindingFlags.Public)
+                                    let p = target.Type.GetProperty(name, BindingFlags.Instance ||| BindingFlags.NonPublic ||| BindingFlags.Public)
+
+                                    if f <> null then return Expr.FieldSet(target, f, v)
+                                    elif p <> null then return Expr.PropertySet(target, p, v, [])
+                                    else return failwithf "invalid field/property: %A" name
                         | _ ->
                             return failwith "only variables can be assigned to a value"
                     
@@ -596,6 +639,20 @@ module Translation =
                                         else
                                             return failwithf "could not get member %A for %A" name t
 
+                | IndexerExpression(arr, index) ->
+                    let! arr = translateExpression arr
+                    let! index = translateExpressions index
+
+                    if arr.Type.IsArray then
+                        return Expr.ArrayGet(arr, index)
+                    else
+                        let item = arr.Type.GetProperty("Item")
+                        if item <> null then
+                            return Expr.PropertyGet(arr, item, index)
+                        else
+                            return failwithf "invalid indexer-expression: %A" e
+
+
                 | CastExpression(t, e) ->
                     let! e = translateExpression e
                     let t = translateType t
@@ -658,6 +715,10 @@ module Translation =
                         return Expr.UnionCaseTest(e, case)
                     else
                         return failwith "type-tests not implemented"
+
+                | TypeOfExpression(t) ->
+                    let t = translateType t
+                    return Expr.Value(t)
 
                 | e when e.IsNull ->
                     return Expr.Value(())

@@ -35,6 +35,22 @@ module ExpressionExtensions =
     let private emptyArray = [||]
     let private getArray = methodInfo <@ emptyArray.[0] @>
 
+    let private arrayGetters =
+        [|
+            (let arr = Array.zeroCreate 0 in methodInfo <@ arr.[0] @>)
+            (let arr = Array2D.zeroCreate 0 0 in methodInfo <@ arr.[0,0] @>)
+            (let arr = Array3D.zeroCreate 0 0 0 in methodInfo <@ arr.[0,0,0] @>)
+            (let arr = Array4D.zeroCreate 0 0 0 0 in methodInfo <@ arr.[0,0,0,0] @>)
+        |]
+
+    let private arraySetters =
+        [|
+            (let arr = Array.zeroCreate 0 in methodInfo <@ arr.[0] <- 1 @>)
+            (let arr = Array2D.zeroCreate 0 0 in methodInfo <@ arr.[0,0] <- 1 @>)
+            (let arr = Array3D.zeroCreate 0 0 0 in methodInfo <@ arr.[0,0,0] <- 1 @>)
+            (let arr = Array4D.zeroCreate 0 0 0 0 in methodInfo <@ arr.[0,0,0,0] <- 1 @>)
+        |]
+
     let private empty = Expr.Value(())
 
     let (|Empty|_|) (e : Expr) =
@@ -47,6 +63,16 @@ module ExpressionExtensions =
 
         static member Empty =
             empty
+
+        static member ArrayGet(arr : Expr, indices : list<Expr>) =
+            let dim = arr.Type.GetArrayRank() 
+            let get = arrayGetters.[dim - 1].MakeGenericMethod [|arr.Type.GetElementType()|]
+            Expr.Call(get, arr::indices)
+
+        static member ArraySet(arr : Expr, indices : list<Expr>, value : Expr) =
+            let dim = arr.Type.GetArrayRank() 
+            let set = arraySetters.[dim - 1].MakeGenericMethod [|arr.Type.GetElementType()|]
+            Expr.Call(set, List.append (arr::indices) [value])
 
         static member Add(l : Expr, r : Expr) : Expr =
             let m = add.MakeGenericMethod [|l.Type; r.Type; r.Type|]
@@ -151,6 +177,32 @@ module ExpressionExtensions =
 
     [<AutoOpen>]
     module Patterns =
+
+        let (|ArrayGet|_|) (e : Expr) =
+            match e with
+                | Call(None, mi, arr::index) when mi.IsGenericMethod && arrayGetters |> Array.exists(fun a -> mi.GetGenericMethodDefinition() = a) ->
+                    Some(arr, index)
+                | _ ->
+                    None
+
+        
+        let (|ArraySet|_|) (e : Expr) =
+            let rec removeLast (l : list<'a>) =
+                match l with
+                    | [e] -> [], e
+                    | e::es -> 
+                        let rest, last = removeLast es
+                        e::rest, last
+                    | [] -> failwith "list is empty"
+
+            match e with
+                | Call(None, mi, arr::index) when mi.IsGenericMethod && arraySetters |> Array.exists(fun a -> mi.GetGenericMethodDefinition() = a) ->
+                    let index, value = removeLast index
+                    Some(arr, index, value)
+                | _ ->
+                    None
+
+
         let (|Add|_|) (e : Expr) =
             match e with
                 | Call(None, mi, [l;r]) when mi.IsGenericMethod && mi.GetGenericMethodDefinition() = add ->

@@ -29,50 +29,55 @@ module Cecil =
         let ass = AppDomain.CurrentDomain.GetAssemblies() |> Seq.find (fun a -> a.FullName = m.FullName)
         ass.Modules |> Seq.head
 
-    let rec toType (t : TypeReference) =
-        match t.FullName with
-            | "System.Object" -> typeof<Object>
-            | "System.DBNull" -> typeof<DBNull>
-            | "System.Boolean" -> typeof<Boolean>
-            | "System.Char" -> typeof<Char>
-            | "System.SByte" -> typeof<SByte>
-            | "System.Byte" -> typeof<Byte>
-            | "System.Int16" -> typeof<Int16>
-            | "System.UInt16" -> typeof<UInt16>
-            | "System.Int32" -> typeof<Int32>
-            | "System.UInt32" -> typeof<UInt32>
-            | "System.Int64" -> typeof<Int64>
-            | "System.UInt64" -> typeof<UInt64>
-            | "System.Single" -> typeof<Single>
-            | "System.Double" -> typeof<Double>
-            | "System.Decimal" -> typeof<Decimal>
-            | "System.DateTime" -> typeof<DateTime>
-            | "System.String" -> typeof<String>
-            | "System.Void" -> typeof<unit>
-            | "System.Type" -> typeof<Type>
-            | "System.Array" -> typeof<Array>
-            | "System.Attribute" -> typeof<Attribute>
-            | "System.ValueType" -> typeof<ValueType>
-            | "System.Enum" -> typeof<Enum>
-            | "System.Delegate" -> typeof<Delegate>
-            | "System.MulticastDelegate" -> typeof<MulticastDelegate>
-            | "System.Exception" -> typeof<Exception>
-            | "System.IntPtr" -> typeof<IntPtr>
-            | "System.UIntPtr" -> typeof<UIntPtr>
-            | "System.Collections.IEnumerable" -> typeof<System.Collections.IEnumerable>
-            | "System.Collections.IEnumerator" -> typeof<System.Collections.IEnumerator>
-            | "System.Collections.ICollection" -> typeof<System.Collections.ICollection>
-            | "System.Threading.Tasks.Task.Task" -> typeof<System.Threading.Tasks.Task>
-            | "System.IDisposable" -> typeof<IDisposable>
-            | _ -> 
-                match t with
-                    | :? GenericInstanceType as g ->
-                        let t = toType g.ElementType
-                        let args = g.GenericArguments |> Seq.map toType |> Seq.toArray
-                        t.MakeGenericType args
-                    | _ ->
-                        let m = toModule t.Module
-                        m.ResolveType(t.MetadataToken.ToInt32())
+    let rec toType (t : TypeReference) : Type =
+        match t with
+            | :? ArrayType as arr ->
+                let t = toType arr.ElementType
+                t.MakeArrayType()
+            | _ ->
+                match t.FullName with
+                    | "System.Object" -> typeof<Object>
+                    | "System.DBNull" -> typeof<DBNull>
+                    | "System.Boolean" -> typeof<Boolean>
+                    | "System.Char" -> typeof<Char>
+                    | "System.SByte" -> typeof<SByte>
+                    | "System.Byte" -> typeof<Byte>
+                    | "System.Int16" -> typeof<Int16>
+                    | "System.UInt16" -> typeof<UInt16>
+                    | "System.Int32" -> typeof<Int32>
+                    | "System.UInt32" -> typeof<UInt32>
+                    | "System.Int64" -> typeof<Int64>
+                    | "System.UInt64" -> typeof<UInt64>
+                    | "System.Single" -> typeof<Single>
+                    | "System.Double" -> typeof<Double>
+                    | "System.Decimal" -> typeof<Decimal>
+                    | "System.DateTime" -> typeof<DateTime>
+                    | "System.String" -> typeof<String>
+                    | "System.Void" -> typeof<unit>
+                    | "System.Type" -> typeof<Type>
+                    | "System.Array" -> typeof<Array>
+                    | "System.Attribute" -> typeof<Attribute>
+                    | "System.ValueType" -> typeof<ValueType>
+                    | "System.Enum" -> typeof<Enum>
+                    | "System.Delegate" -> typeof<Delegate>
+                    | "System.MulticastDelegate" -> typeof<MulticastDelegate>
+                    | "System.Exception" -> typeof<Exception>
+                    | "System.IntPtr" -> typeof<IntPtr>
+                    | "System.UIntPtr" -> typeof<UIntPtr>
+                    | "System.Collections.IEnumerable" -> typeof<System.Collections.IEnumerable>
+                    | "System.Collections.IEnumerator" -> typeof<System.Collections.IEnumerator>
+                    | "System.Collections.ICollection" -> typeof<System.Collections.ICollection>
+                    | "System.Threading.Tasks.Task.Task" -> typeof<System.Threading.Tasks.Task>
+                    | "System.IDisposable" -> typeof<IDisposable>
+                    | _ -> 
+                        match t with
+                            | :? GenericInstanceType as g ->
+                                let t = toType g.ElementType
+                                let args = g.GenericArguments |> Seq.map toType |> Seq.toArray
+                                t.MakeGenericType args
+                            | _ ->
+                                let m = toModule t.Module
+                                m.ResolveType(t.MetadataToken.ToInt32())
 
     let toMethodInfo (mr : MethodReference) =
         let m = toModule mr.Module

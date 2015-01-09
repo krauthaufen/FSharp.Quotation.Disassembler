@@ -30,6 +30,13 @@ module Patterns =
                 Some (Identifier(id.Identifier))
             | _ -> None
 
+    let (|IndexerExpression|_|) (e : Expression) =
+        match e with
+            | :? IndexerExpression as i ->
+                Some (i.Target, i.Arguments |> Seq.toList)
+            | _ ->
+                None
+
     let (|Expression|_|) (n : AstNode) =
         match n with
             | :? Expression as e ->
@@ -177,6 +184,13 @@ module Patterns =
         match e with
             | :? CastExpression as e ->
                 Some (CastExpression(e.Type, e.Expression))
+            | _ ->
+                None
+
+    let (|TypeOfExpression|_|) (e : Expression) =
+        match e with
+            | :? TypeOfExpression as t ->
+                Some(t.Type)
             | _ ->
                 None
 
