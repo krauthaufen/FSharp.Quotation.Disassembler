@@ -54,7 +54,6 @@
     <Reference Include="System.Numerics" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="ILReader.fs" />
     <Compile Include="Cecil.fs" />
     <Compile Include="Patterns.fs" />
     <Compile Include="StateMonad.fs" />

@@ -33,7 +33,19 @@ module ExpressionExtensions =
     let private eq = methodInfo <@ (=) @>
     let private neq = methodInfo <@ (<>) @>
 
+    let private empty = Expr.Value(())
+
+    let (|Empty|_|) (e : Expr) =
+        if e = empty then
+            Some Empty
+        else
+            None
+
     type Expr with
+
+        static member Empty =
+            empty
+
         static member Add(l : Expr, r : Expr) : Expr =
             let m = add.MakeGenericMethod [|l.Type; r.Type; r.Type|]
             Expr.Call(m, [l;r])
@@ -118,6 +130,14 @@ module Translation =
         { run = fun s ->
             (), { s with locals = v |> List.fold (fun m v -> Map.add v.Name v m) s.locals}
         }
+
+    let private push (v : list<Var>) =
+        { run = fun s ->
+            s, { s with locals = v |> List.fold (fun m v -> Map.add v.Name v m) s.locals}
+        }
+
+    let private pop s =
+        { run = fun _ -> (), s }
 
     let private setReturnType (t : System.Type) =
         { run = fun s ->
@@ -335,34 +355,34 @@ module Translation =
                 yield ex
         }
 
-    let rec translateStatments (s : list<AstNode>) =
+    let rec translateStatements (s : list<AstNode>) =
         state {
             match s with
                 | Block(body)::rest ->
-                    return! translateStatments (List.append body rest)
+                    return! translateStatements (List.append body rest)
 
                 | ExpressionStatement(ex)::rest ->
                     let! ex = translateExpression ex
-                    let! rest = translateStatments rest
+                    let! rest = translateStatements rest
 
                     return Expr.Seq(ex, rest)
 
                 | IfElseStatement(cond, i, e)::rest ->
                     let! cond = translateExpression cond
-                    let! i = translateStatments [i]
-                    let! e = translateStatments [e]
+
+                    let! i = translateStatements [i]
+                    let! e = translateStatements [e]
                     let res = Expr.IfThenElse(cond, i, e)
 
-                    let! rest = translateStatments rest
+                    let! rest = translateStatements rest
                     return Expr.Seq(res, rest)
 
                 | ForStatement(init, cond, step, body)::rest ->
-                    let! rest = translateStatments rest
-                    let! i = translateStatments [body]
-
+                    
                     match init, cond, step with
+                        // for(int i = <start>; i < <upper>; i++) { <body> }
                         | [VariableDeclaration [Init(name, start)]], 
-                          BinaryOperator(BinaryOperatorType.LessThan, Identifier(vc), upper), 
+                           BinaryOperator(BinaryOperatorType.LessThan, Identifier(vc), upper), 
                           [ExpressionStatement(PostIncrement(Expression(Identifier(vi))))] when name = vi && name = vc ->
                             let! start = translateExpression start
                             let! upper = translateExpression upper
@@ -370,23 +390,43 @@ module Translation =
                             
                             let i = Var(name, typeof<int>)
 
-                            let! s = getState
-                            do! declare [i]
-                            let! body = translateStatments [body]
-                            do! putState s
+                            let! s = push [i]
+                            let! body = translateStatements [body]
+                            do! pop s
 
-                            return Expr.ForIntegerRangeLoop(i, start, upper, body)
+                            let! rest = translateStatements rest
+
+
+                            return Expr.Seq(Expr.ForIntegerRangeLoop(i, start, upper, body), rest)
                         | _ ->
-                            return failwith "not implemented"
+
+                            // complex for-loops are translated to while-loops
+                            // for(<init>; <cond>; <step>) { <body> } -> <init>; while(<cond>) { <body>; <step> }
+
+                            let whileBody = ICSharpCode.NRefactory.CSharp.BlockStatement()
+                            whileBody.Add (body.Clone())
+                            step |> Seq.iter(fun s -> whileBody.Add (s.Clone() |> unbox<Statement>))
+
+                            let wh = ICSharpCode.NRefactory.CSharp.WhileStatement()
+                            wh.Condition <- cond.Clone()
+                            wh.EmbeddedStatement <- whileBody
+
+                            let! s = push []
+                            let! res = translateStatements (List.append init [wh])
+                            do! pop s
+
+                            let! rest = translateStatements rest
+                            return Expr.Seq(res, rest)
+
                             
                 | ReturnStatement(v)::rest ->
                     let! v = translateExpression v
-                    let! rest = translateStatments rest
+                    let! rest = translateStatements rest
 
                     return Expr.Seq(Expr.Return v, rest)
 
                 | NullStatement::rest ->
-                    return! translateStatments rest
+                    return! translateStatements rest
 
                 | (VariableDeclaration [Init(name, value)] as decl)::rest ->
                     let decl = decl |> unbox<VariableDeclarationStatement>
@@ -399,27 +439,44 @@ module Translation =
                             state { return Expr.DefaultValue(t) }
 
                     let v = Var(name, t)
-                    do! declare [v]
-
-                    let! rest = translateStatments rest
+                    let! s = push [v]
+                    let! rest = translateStatements rest
+                    do! pop s
 
                     return Expr.Let(v, value, rest)
                     
+                | WhileStatement(cond, body)::rest ->
+                    let! cond = translateExpression cond
+                    let! body = translateStatements [body]
+
+                    let res = Expr.WhileLoop(cond, body)
+                    let! rest = translateStatements rest
+                    return Expr.Seq(res, rest)
+
+                | DoWhileStatement(cond, body)::rest ->
+
+                    // do { <body> } while(<cond>); -> <body>; while(<cond>) { <body> }
+
+                    let wh = ICSharpCode.NRefactory.CSharp.WhileStatement()
+                    wh.Condition <- cond.Clone()
+                    wh.EmbeddedStatement <- body.Clone()
+                    return! translateStatements (List.append [body; wh] rest)
+
+
                 | e::_ ->
-                    return failwithf "unknown statement: %A" e 
+                    return failwithf "unsupported statement: %A" e 
 
                 | [] ->
-                    return Expr.Value(())
+                    return Expr.Empty
         }
 
     let translateMethodDeclaration(m : ICSharpCode.NRefactory.CSharp.MethodDeclaration) =
         state {
             
-            
             let vars = m.Parameters |> Seq.map (fun p -> Var(p.Name, translateType p.Type)) |> Seq.toList
             do! declare vars
             do! setReturnType (translateType m.ReturnType)
-            let! body = translateStatments [m.Body]
+            let! body = translateStatements [m.Body]
 
 
             let rec buildLambda (args : list<Var>) (b : Expr) =

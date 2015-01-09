@@ -79,10 +79,13 @@ module FSharp =
 
 
 type Test() =
+    static member Other(a : int) =
+        a + 10
+
     static member Do(a : int) =
         let mutable v = a
-        for i in 0..10 do
-            v <- v + a
+        while v < 10 do
+            v <- v + Test.Other(a)
         v
 
 [<EntryPoint>]

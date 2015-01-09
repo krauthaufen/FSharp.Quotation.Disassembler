@@ -140,7 +140,10 @@ module Patterns =
     let (|ForStatement|_|) (n : AstNode) =
         match n with
             | :? ForStatement as f ->
-                Some (ForStatement(f.Initializers |> Seq.toList, f.Condition, f.Iterators |> Seq.toList, f.EmbeddedStatement))
+                let init = f.Initializers |> Seq.map (fun a -> a :> AstNode) |> Seq.toList
+                let iter = f.Iterators |> Seq.map (fun a -> a :> AstNode) |> Seq.toList
+
+                Some (ForStatement(init, f.Condition, iter, f.EmbeddedStatement))
             | _ ->
                 None
 
