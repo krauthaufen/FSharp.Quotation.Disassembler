@@ -55,8 +55,12 @@ module Patterns =
         
         match n with
             | :? PrimitiveExpression as p ->
-                let t = n.Annotation<TypeInformation>().InferredType
-                Some (Constant(t, p.Value))
+                let ti = n.Annotation<TypeInformation>()
+                if ti <> null then
+                    let t = ti.InferredType
+                    Some (Constant(Cecil.toType t, p.Value))
+                else
+                    Some (Constant(p.Value.GetType(), p.Value))
             | _ ->
                 None
 
@@ -116,6 +120,15 @@ module Patterns =
             | _ ->
                 None
 
+    let (|SwitchStatement|_|) (n : AstNode) =
+        match n with
+            | :? SwitchStatement as s ->
+                Some (s.Expression, s.SwitchSections |> Seq.toList)
+            | _ ->
+                None
+
+    
+
     let (|ReturnStatement|_|) (n : AstNode) =
         match n with
             | :? ReturnStatement as r ->
@@ -139,7 +152,6 @@ module Patterns =
     let (|NullExpression|_|) (n : Expression) =
         match n with
             | :? NullReferenceExpression as n ->
-                printfn "%A" n
                 Some NullExpression
             | _ ->
                 None

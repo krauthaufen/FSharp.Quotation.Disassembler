@@ -73,6 +73,12 @@ type StateListBuilder() =
             (f v).runList s
         }
 
+    member x.Bind(m : StateList<'s, 'a>, f : list<'a> -> StateList<'s, 'b>) =
+        { runList = fun s ->
+            let v, s = m.runList s
+            (f v).runList s
+        }
+
     member x.Return(v : unit) = { runList = fun s -> [], s }
 
     member x.Zero() = { runList = fun s -> [], s }

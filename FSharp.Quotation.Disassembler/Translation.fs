@@ -461,7 +461,7 @@ module Translation =
                 | ShapeVar(v) ->
                     e
                 | ShapeCombination(o, args) ->
-                    e
+                    RebuildShapeCombination(o, args |> List.map removeImperativeReturn)
 
         let rec removeRetFunctions (e : Expr) =
             match e with
@@ -477,10 +477,16 @@ module Translation =
 
         let rec liftUnionConstructors (e : Expr) =
             match e with
+                | PropertyGet(None, p, []) ->
+                    let case = FSharpType.GetUnionCases(p.DeclaringType) |> Seq.tryFind (fun c -> c.Name = p.Name)
+                    match case with
+                        | Some case -> Expr.NewUnionCase(case, [])
+                        | None -> e
+
                 | Call(None, mi, args) when FSharpType.IsUnion(mi.DeclaringType) ->
                     let case = FSharpType.GetUnionCases(mi.DeclaringType) |> Seq.tryFind (fun c -> c.Name = mi.Name)
                     match case with
-                        | Some case -> Expr.NewUnionCase(case, args)
+                        | Some case -> Expr.NewUnionCase(case, args |> List.map liftUnionConstructors)
                         | None -> Expr.Call(mi, args |> List.map liftUnionConstructors)
 
                 | Value(null, t) when FSharpType.IsUnion t ->
@@ -492,9 +498,13 @@ module Translation =
                 | ShapeCombination(o, args) -> RebuildShapeCombination(o, args |> List.map liftUnionConstructors)
 
         let prepare (e : Expr) =
-            e |> removeImperativeReturn |> removeRetFunctions |> liftUnionConstructors
+            e |> liftUnionConstructors|> removeImperativeReturn |> removeRetFunctions
 
 
+    // TODO:
+    //  + indexed properties
+    //  + array-access stuff
+    //  + pattern matching
     let rec translateExpression (e : Expression) : Trans<Expr> =
         state {
             match e with
@@ -508,7 +518,7 @@ module Translation =
                     return unary op e
 
                 | Constant(t, value) ->
-                    return Expr.Value(value, Cecil.toType t)
+                    return Expr.Value(value, t)
 
                 | Identifier(v) ->
                     let! v = resolve v
@@ -587,8 +597,14 @@ module Translation =
 
                         return wrap localValues res
 
+                    // tuples
                     elif FSharpType.IsTuple t then
                         return Expr.NewTuple(args)
+
+                    elif FSharpType.IsRecord t then
+                        return Expr.NewRecord(t, args)
+
+                    // any other .NET type
                     else
                         let ctor = t.GetConstructor(args |> List.map (fun a -> a.Type) |> List.toArray)
                         return Expr.NewObject(ctor, args)
@@ -601,7 +617,18 @@ module Translation =
                         | _ ->
                             match target with
                                 | :? TypeReferenceExpression as t ->
-                                    return failwith ""
+                                    let t = translateType t.Type
+
+                                    let f = t.GetField(name, BindingFlags.Static ||| BindingFlags.NonPublic ||| BindingFlags.Public)
+                                    let p = t.GetProperty(name, BindingFlags.Static ||| BindingFlags.NonPublic ||| BindingFlags.Public)
+
+                                    if f <> null then
+                                        return Expr.FieldGet(f)
+                                    elif p <> null then
+                                        return Expr.PropertyGet(p, [])
+                                    else
+                                        return failwithf "could not get member %A for %A" name t
+
                                 | _ ->
                                     let! t = translateExpression target
 
@@ -653,6 +680,53 @@ module Translation =
 
                     let! rest = translateStatements rest
                     return Expr.Seq(res, rest)
+
+                | SwitchStatement(value, cases)::rest ->
+                    
+                    let labelsAndBodies = cases |> List.map (fun c -> 
+                        let labels = c.CaseLabels |> Seq.map (fun l -> l.Expression) |> Seq.toList
+                        let body = c.Statements |> Seq.toList
+
+                        labels, body
+                    )
+                    
+                    let! s = getState
+                    let! result =
+                        statelist {
+                            for (labels, body) in labelsAndBodies do
+                                do! putState s
+
+                                let labels = labels |> List.filter(fun l -> not l.IsNull)
+                                let! labels = translateExpressions labels
+                                let! body = translateStatements (body |> List.map (fun a -> a :> _))
+                                let! v = translateExpression value
+
+                                
+                                let tests = 
+                                    if value.IsNull then []
+                                    else labels |> List.map (fun vi -> Expr.Equal(v, vi))
+
+                                let rec buildOr (labels : list<Expr>) =
+                                    match labels with
+                                        | [l] -> l
+                                        | l::labels -> Expr.IfThenElse(l, Expr.Value(true), buildOr labels)
+                                        | [] -> Expr.Value(false)
+
+                                yield (buildOr tests), body
+                        }
+
+                    let rec buildCases (cases : list<Expr * Expr>) =
+                        match cases with
+                            | [(_, e)] ->
+                                e
+                            | (l,e)::cases ->
+                                Expr.IfThenElse(l, e, buildCases cases)
+                            | [] ->
+                                Expr.Empty
+
+
+                    let res = buildCases result
+                    return res
 
                 | ForStatement(init, cond, step, body)::rest ->
                     

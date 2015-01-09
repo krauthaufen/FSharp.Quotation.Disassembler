@@ -86,12 +86,12 @@ module PrettyPrint =
 
     let rec private str (e : Expr) =
         match e with
-            
+
             | Let(v, MultiArgLambda(args, b), e) when not v.IsMutable ->
                 let b = str b |> String.indent
                 let e = str e
                 let args = args |> List.map(fun v -> sprintf "(%s : %s)" v.Name (typeStr v.Type)) |> String.concat " "
-                sprintf "let %s %s =\r\n%s\r\n%s" v.Name args b e
+                sprintf "let %s %s =\r\n%s\r\n\r\n%s" v.Name args b e
 
             | Let(v,e,b) ->
                 let b = str b
@@ -118,6 +118,7 @@ module PrettyPrint =
             | Subtract(l,r) -> sprintf "%s - %s" (str l) (str r)
             | Multiply(l,r) -> sprintf "%s * %s" (str l) (str r)
             | Divide(l,r) -> sprintf "%s / %s" (str l) (str r)
+            | Modulus(l,r) -> sprintf "%s %% %s" (str l) (str r)
             | Negate(l) -> sprintf "-%s" (str l)
             | BitwiseAnd(l,r) -> sprintf "%s &&& %s" (str l) (str r)
             | BitwiseOr(l,r) -> sprintf "%s ||| %s" (str l) (str r)
@@ -137,17 +138,45 @@ module PrettyPrint =
                         sprintf "%s.%s(%s)" t mi.Name (args |> String.concat ", ")
                     | None ->
                         sprintf "%s.%s(%s)" (typeStr mi.DeclaringType) mi.Name (args |> String.concat ", ")
-            | IfThenElse(c, i, e) ->
-                let c = str c
-                let i = str i |> String.indent
-                let e = str e |> String.indent
 
-                sprintf "if %s then\r\n%s\r\nelse\r\n%s" c i e
+
+
+            | IfThenElse(c, i, e) ->
+                let rec cstr (e : Expr) =
+                    match e with
+                        | IfThenElse(a, Value(:? bool as v, _), b) when v = true ->
+                            // OR
+                            sprintf "%s || %s" (cstr a) (cstr b)
+
+                        | IfThenElse(a, b, Value(:? bool as v, _)) when v = false ->
+                            // AND
+                            sprintf "%s && %s" (cstr a) (cstr b)
+
+                        | e ->
+                            str e
+
+                let c = cstr c
+                let i = str i |> String.indent
+
+                match e with
+                    | IfThenElse(_,_,_) ->
+                        let e = str e
+                        sprintf "if %s then\r\n%s\r\nel%s" c i e
+
+                    | _ ->
+                        let e = str e |> String.indent
+                        sprintf "if %s then\r\n%s\r\nelse\r\n%s" c i e
             | WhileLoop(c, b) ->
                 let c = str c
                 let b = str b |> String.indent
                 sprintf "while %s do\r\n%s" c b
 
+            | ForIntegerRangeLoop(v, s, e, b) ->
+                let s = str s
+                let e = str e
+                let b = str b |> String.indent
+
+                sprintf "for %s in %s..%s do\r\n%s" v.Name s e b
             
 
             | MultiArgLambda(v, b) ->
@@ -182,15 +211,44 @@ module PrettyPrint =
                 args |> List.map str |> String.concat ", " |> sprintf "(%s)"
 
             | NewUnionCase(c, args) ->
-                let cnt = List.length args
-                let args = args |> List.map str |> String.concat ", "
+                if c.DeclaringType.IsGenericType && c.DeclaringType.GetGenericTypeDefinition() = typedefof<list<_>> then
+                    let rec flattenListCtor (args : Expr) =
+                        match args with
+                            | NewUnionCase(c, [h;t]) ->
+                                let t, r = flattenListCtor t
+                                h::t, r
+                            | NewUnionCase(c, []) ->
+                                [], None
+                            | e ->
+                                [], Some e
 
-                if cnt = 0 then
-                    c.Name
-                elif cnt > 1 then
-                    sprintf "%s(%s)" c.Name args
+                    match flattenListCtor e with
+                        | elements, Some rest ->
+                            let rec build (e : list<Expr>) =
+                                match e with
+                                    | [] -> str rest
+                                    | ei::e ->
+                                        sprintf "%s::%s" (str ei) (build e)
+                            build elements
+
+                        | elements, None ->
+                            elements |> List.map str |> String.concat "; " |> sprintf "[%s]"
+
                 else
-                    sprintf "%s %s" c.Name args
+                    let cnt = List.length args
+                    let args = args |> List.map str |> String.concat ", "
+
+                    if cnt = 0 then
+                        c.Name
+                    elif cnt > 1 then
+                        sprintf "%s(%s)" c.Name args
+                    else
+                        sprintf "%s %s" c.Name args
+
+            | NewRecord(t, args) ->
+                let fields = FSharpType.GetRecordFields t |> Array.toList
+
+                List.zip fields args |> List.map (fun (f,a) -> sprintf "%s = %s" f.Name (str a)) |> String.concat "; " |> sprintf "{ %s }"
 
             | e -> sprintf "%A" e
 
@@ -199,7 +257,7 @@ module PrettyPrint =
             | ShapeVar(_) -> e.Type.Namespace |> Set.singleton
             | ShapeLambda(v,b) ->
                 let res = allNamespaces b
-                Set.add e.Type.Namespace res
+                Set.add v.Type.Namespace (Set.add e.Type.Namespace res)
 
             | ShapeCombination(o, args) ->
                 args |> List.fold (fun s a -> Set.union s (allNamespaces a)) (Set.singleton e.Type.Namespace)
@@ -207,7 +265,7 @@ module PrettyPrint =
     let definition (name : string) (e : Expr) =
         match e with
             | MultiArgLambda(args, b) ->
-                let namespaces = allNamespaces e |> Set.remove "Microsoft.FSharp.Core" |> Seq.map(fun n -> sprintf "open %s" n)
+                let namespaces = allNamespaces e |> Set.remove "Microsoft.FSharp.Core" |> Set.remove null |> Seq.map(fun n -> sprintf "open %s" n)
 
                 let b = str b |> String.indent
                 let args = args |> List.map(fun v -> sprintf "(%s : %s)" v.Name (typeStr v.Type)) |> String.concat " "
@@ -218,21 +276,26 @@ module PrettyPrint =
             | _ ->
                 str e
 
+
+type MyRecord = { aa : int; ba : list<int> }
+
+
 type Test() =
     static member Other(a : int) =
         a + 10
 
     static member Do(a : int, b : int) =
-        let other (a,b) =
-            a + b
+        let other (a,b) = a + b
 
-        if a > 0 then
-            let mutable v = a
-            while v < 10 do
-                v <- v + other (a,b)
-            Some(v,a)
-        else
-            None
+        match a with
+            | 0 | 1 -> { aa = 0; ba = [1] }
+            | a when a % 2 = 0 ->
+                let mutable v = a
+                for i in 0..9 do
+                    v <- v + other (a*b, a)
+                { aa = a; ba = [] }
+            | a ->
+                { aa = a; ba = [a;a] }
 
 [<EntryPoint>]
 let main args =
