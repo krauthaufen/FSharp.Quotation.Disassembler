@@ -720,6 +720,9 @@ module Translation =
                     let t = translateType t
                     return Expr.Value(t)
 
+                | QueryExpression(clauses) ->
+                    return! translateClauses None clauses
+
                 | e when e.IsNull ->
                     return Expr.Value(())
                 | _ ->
@@ -731,6 +734,61 @@ module Translation =
             for e in e do
                 let! ex = translateExpression e
                 yield ex
+        }
+
+    and translateClauses (e : Option<Var * Expr>) (clauses : list<QueryClause>) : Trans<Expr> =
+        state {
+            match e, clauses with
+                | None, QueryFrom(name, e)::rest ->
+                    let! e = translateExpression e
+                    let elementType = 
+                        if e.Type.IsGenericType && e.Type.GetGenericTypeDefinition() = typedefof<seq<_>> then
+                            e.Type.GetGenericArguments().[0]
+                        else
+                            e.Type.GetInterface(typedefof<seq<_>>.FullName).GetGenericArguments().[0]
+
+                    let v = Var(name, elementType)
+                    let! s = push [v]
+                    let! res = translateClauses (Some (v, e)) rest
+                    do! pop s
+
+                    return res
+
+                | Some (v, e), QueryWhere(condition)::rest ->
+                    let! cond = translateExpression condition
+                    let filter = methodInfo <@ Seq.filter @>
+                    
+                    let vi = Var("arg", e.Type)
+                    let e = Expr.PipeRight(e, Expr.Lambda(vi, Expr.Call(filter.MakeGenericMethod [|v.Type|], [Expr.Lambda(v, cond); Expr.Var vi])))
+                    return! translateClauses (Some (v, e)) rest
+
+                | Some(v,e), [QuerySelect(ex)] ->
+                    let! ex = translateExpression ex
+                    let map = methodInfo <@ Seq.map @>
+                    
+                    let vi = Var("arg", e.Type)
+                    let e = Expr.PipeRight(e, Expr.Lambda(vi, Expr.Call(map.MakeGenericMethod [|v.Type; ex.Type|], [Expr.Lambda(v, ex); Expr.Var vi])))
+                    return e
+
+//                | [QueryFrom(name, e);QuerySelect(ex)] ->
+//                    let map = methodInfo <@ Seq.map @>
+//                    let! e = translateExpression e
+//                    let elementType = 
+//                        if e.Type.IsGenericType && e.Type.GetGenericTypeDefinition() = typedefof<seq<_>> then
+//                            e.Type.GetGenericArguments().[0]
+//                        else
+//                            e.Type.GetInterface(typedefof<seq<_>>.FullName).GetGenericArguments().[0]
+//                    
+//                    let v = Var(name, elementType)
+//                    let! s = push [v]
+//                    let! body = translateExpression ex
+//                    do! pop s
+//
+//                    return Expr.Call(map.MakeGenericMethod [|elementType; body.Type|], [Expr.Lambda(v, body); e])
+//
+//  
+
+                | _ -> return failwith "not supported"
         }
 
     and translateStatements (s : list<AstNode>) =

@@ -89,7 +89,13 @@ module PrettyPrint =
                             let args = t.GetGenericArguments() |> Array.map typeStr |> String.concat ", "
                             sprintf "%s<%s>" n args
                     else
-                        t.Name
+                        let suffixAtt = t.GetCustomAttributes(typeof<CompilationRepresentationAttribute>, true) |> Seq.map unbox<CompilationRepresentationAttribute> |> Seq.tryFind(fun _ -> true)
+                        match suffixAtt with
+                            | Some suffixAtt when int (suffixAtt.Flags &&& CompilationRepresentationFlags.ModuleSuffix) <> 0 && t.Name.EndsWith "Module"->
+                                t.Name.Substring(0, t.Name.Length - 6)
+                                
+                            | _ -> 
+                                t.Name
 
     
 
@@ -162,14 +168,54 @@ module PrettyPrint =
                 let value = str value
                 sprintf "%s.[%s] <- %s" arr index value
 
+            | PipeRight(l, Lambda(v, Call(None, mi, [a; Var vb]))) when v = vb ->
+                let nameAtt = mi.GetCustomAttributes(typeof<CompilationSourceNameAttribute>, true) |> Seq.map unbox<CompilationSourceNameAttribute> |> Seq.tryFind(fun _ -> true)
+
+                let name =
+                    if nameAtt.IsSome then nameAtt.Value.SourceName
+                    else mi.Name
+
+                let l = str l
+                let a = str a
+                let t = typeStr mi.DeclaringType
+                sprintf "%s |> %s.%s (%s)" l t name a
+
+            | PipeRight(l, r) ->
+                let l = str l
+                let r = str r
+                sprintf "%s |> %s" l r
+
             | Call(t, mi, args) ->
+                let nameAtt = mi.GetCustomAttributes(typeof<CompilationSourceNameAttribute>, true) |> Seq.map unbox<CompilationSourceNameAttribute> |> Seq.tryFind(fun _ -> true)
+
+                let name =
+                    if nameAtt.IsSome then nameAtt.Value.SourceName
+                    else mi.Name
+
+                let argAtt = mi.GetCustomAttributes(typeof<CompilationArgumentCountsAttribute>, true) |> Seq.map unbox<CompilationArgumentCountsAttribute> |> Seq.tryFind(fun _ -> true)
                 let args = args |> List.map str
+
+                let brackets (str : string) =
+                    if (str.Contains " " || str.Contains "(") && not (str.StartsWith "(") then
+                        sprintf "(%s)" str
+                    else
+                        str
+                let args =
+                    match argAtt with
+                        | Some att ->
+                            let arr = args |> List.toArray
+                            let (l, _) = att.Counts |> Seq.fold (fun (l,c) a -> (Array.sub arr c a)::l, (c + a)) ([],0) 
+
+                            l |> Seq.toList |> List.rev |> List.map (fun arr -> arr |> String.concat ", " |> brackets) |> String.concat " "
+                        | None ->
+                            args |> String.concat ", "
+
                 match t with
                     | Some t ->
                         let t = str t
-                        sprintf "%s.%s(%s)" t mi.Name (args |> String.concat ", ")
+                        sprintf "%s.%s %s" t name args
                     | None ->
-                        sprintf "%s.%s(%s)" (typeStr mi.DeclaringType) mi.Name (args |> String.concat ", ")
+                        sprintf "%s.%s %s" (typeStr mi.DeclaringType) name args
 
 
             | IfThenElse(c, i, e) ->
@@ -237,9 +283,12 @@ module PrettyPrint =
                 sprintf "%s <- %s" get (str value)
 
             | MultiArgLambda(v, b) ->
-                let b = str b |> String.indent
+                let b = str b
                 let args = v |> List.map (fun v -> sprintf "(%s : %s)" v.Name (typeStr v.Type)) |> String.concat " "
-                sprintf "fun %s ->\r\n%s" args b
+                if String.isSingleLine b then
+                    sprintf "fun %s -> %s" args b
+                else
+                    sprintf "fun %s ->\r\n%s" args (String.indent b)
 
             | VarSet(v, e) ->
                 let e = str e

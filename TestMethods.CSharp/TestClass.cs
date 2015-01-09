@@ -95,5 +95,11 @@ namespace TestMethods.CSharp
             return a ?? 1;
         }
 
+
+        public static IEnumerable<int> Test8(IEnumerable<int> input)
+        {
+            return from a in input where a > 10 select 2 * a;
+        }
+
     }
 }

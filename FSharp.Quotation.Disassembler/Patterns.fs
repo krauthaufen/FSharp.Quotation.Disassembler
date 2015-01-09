@@ -266,6 +266,33 @@ module Patterns =
             | _ ->
                 None
 
+    let (|QueryExpression|_|) (e : Expression) =
+        match e with
+            | :? QueryExpression as e ->
+                Some (e.Clauses |> Seq.toList)
+            | _ -> 
+                None
+
+    let (|QueryFrom|_|) (e : QueryClause) =
+        match e with
+            | :? QueryFromClause as q ->
+                Some (q.Identifier, q.Expression)
+            | _ ->
+                None
+
+    let (|QueryWhere|_|) (e : QueryClause) =
+        match e with
+            | :? QueryWhereClause as q ->
+                Some (q.Condition)
+            | _ ->
+                None
+
+    let (|QuerySelect|_|) (e : QueryClause) =
+        match e with
+            | :? QuerySelectClause as q ->
+                Some (q.Expression)
+            | _ ->
+                None
 
     let subtractOne (e : Expr) =
         match e with

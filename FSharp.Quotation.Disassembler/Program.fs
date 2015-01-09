@@ -60,9 +60,14 @@ type Test() =
         a.Value <- 9
         System.Activator.CreateInstance(typeof<int>)
 
+    static member Curries (a : list<int>) =
+        let l = List.map (fun i -> i + 2) a
+
+        List.zip l a |> List.filter (fun a -> true)
+
 [<EntryPoint>]
 let main args =
-    let mi = typeof<Test>.GetMethod "Ref"
+    let mi = typeof<Test>.GetMethod "Curries"
     let meth = Cecil.disassemble mi
 
     let ex = Translation.translateMethodDeclaration meth

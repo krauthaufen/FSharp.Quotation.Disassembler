@@ -35,6 +35,8 @@ module ExpressionExtensions =
     let private emptyArray = [||]
     let private getArray = methodInfo <@ emptyArray.[0] @>
 
+    let private pipeRight = methodInfo <@ (|>) @>
+
     let private arrayGetters =
         [|
             (let arr = Array.zeroCreate 0 in methodInfo <@ arr.[0] @>)
@@ -63,6 +65,11 @@ module ExpressionExtensions =
 
         static member Empty =
             empty
+
+        static member PipeRight (l : Expr, r : Expr) =
+            let (_,rt) = FSharpType.GetFunctionElements r.Type
+            let pipe = pipeRight.MakeGenericMethod [|l.Type; rt|]
+            Expr.Call(pipe, [l;r])
 
         static member ArrayGet(arr : Expr, indices : list<Expr>) =
             let dim = arr.Type.GetArrayRank() 
@@ -177,6 +184,13 @@ module ExpressionExtensions =
 
     [<AutoOpen>]
     module Patterns =
+
+        let (|PipeRight|_|) (e : Expr) =
+            match e with
+                | Call(None, mi, [l;r]) when mi.IsGenericMethod && mi.GetGenericMethodDefinition() = pipeRight ->
+                    Some(l, r)
+                | _ ->
+                    None
 
         let (|ArrayGet|_|) (e : Expr) =
             match e with
