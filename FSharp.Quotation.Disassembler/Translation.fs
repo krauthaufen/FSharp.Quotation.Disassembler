@@ -1,5 +1,6 @@
 ﻿namespace FSharp.Quotation.Disassembler
 
+open Microsoft.FSharp.Reflection
 open Microsoft.FSharp.Quotations
 open Microsoft.FSharp.Quotations.Patterns
 open ICSharpCode.Decompiler.Ast
@@ -115,6 +116,128 @@ module ExpressionExtensions =
             let m = neq.MakeGenericMethod [|l.Type|]
             Expr.Call(m, [l;r])
 
+    [<AutoOpen>]
+    module Patterns =
+        let (|Add|_|) (e : Expr) =
+            match e with
+                | Call(None, mi, [l;r]) when mi.IsGenericMethod && mi.GetGenericMethodDefinition() = add ->
+                    Some (l,r)
+                | _ ->
+                    None
+
+        let (|Subtract|_|) (e : Expr) =
+            match e with
+                | Call(None, mi, [l;r]) when mi.IsGenericMethod && mi.GetGenericMethodDefinition() = sub ->
+                    Some (l,r)
+                | _ ->
+                    None
+
+        let (|Multiply|_|) (e : Expr) =
+            match e with
+                | Call(None, mi, [l;r]) when mi.IsGenericMethod && mi.GetGenericMethodDefinition() = mul ->
+                    Some (l,r)
+                | _ ->
+                    None
+
+        let (|Divide|_|) (e : Expr) =
+            match e with
+                | Call(None, mi, [l;r]) when mi.IsGenericMethod && mi.GetGenericMethodDefinition() = div ->
+                    Some (l,r)
+                | _ ->
+                    None
+
+        let (|Modulus|_|) (e : Expr) =
+            match e with
+                | Call(None, mi, [l;r]) when mi.IsGenericMethod && mi.GetGenericMethodDefinition() = modulus ->
+                    Some (l,r)
+                | _ ->
+                    None
+
+        let (|Negate|_|) (e : Expr) =
+            match e with
+                | Call(None, mi, [l]) when mi.IsGenericMethod && mi.GetGenericMethodDefinition() = negate ->
+                    Some (l)
+                | _ ->
+                    None
+
+        let (|LeftShift|_|) (e : Expr) =
+            match e with
+                | Call(None, mi, [l;r]) when mi.IsGenericMethod && mi.GetGenericMethodDefinition() = leftShift ->
+                    Some (l,r)
+                | _ ->
+                    None
+
+        let (|RightShift|_|) (e : Expr) =
+            match e with
+                | Call(None, mi, [l;r]) when mi.IsGenericMethod && mi.GetGenericMethodDefinition() = rightShift ->
+                    Some (l,r)
+                | _ ->
+                    None
+
+
+        let (|BitwiseAnd|_|) (e : Expr) =
+            match e with
+                | Call(None, mi, [l;r]) when mi.IsGenericMethod && mi.GetGenericMethodDefinition() = bitAnd ->
+                    Some (l,r)
+                | _ ->
+                    None
+
+        let (|BitwiseOr|_|) (e : Expr) =
+            match e with
+                | Call(None, mi, [l;r]) when mi.IsGenericMethod && mi.GetGenericMethodDefinition() = bitOr ->
+                    Some (l,r)
+                | _ ->
+                    None
+
+        let (|BitwiseExclusiveOr|_|) (e : Expr) =
+            match e with
+                | Call(None, mi, [l;r]) when mi.IsGenericMethod && mi.GetGenericMethodDefinition() = bitXOr ->
+                    Some (l,r)
+                | _ ->
+                    None
+
+        let (|SmallerThan|_|) (e : Expr) =
+            match e with
+                | Call(None, mi, [l;r]) when mi.IsGenericMethod && mi.GetGenericMethodDefinition() = lt ->
+                    Some (l,r)
+                | _ ->
+                    None
+
+        let (|GreaterThan|_|) (e : Expr) =
+            match e with
+                | Call(None, mi, [l;r]) when mi.IsGenericMethod && mi.GetGenericMethodDefinition() = gt ->
+                    Some (l,r)
+                | _ ->
+                    None
+
+        let (|SmallerOrEqual|_|) (e : Expr) =
+            match e with
+                | Call(None, mi, [l;r]) when mi.IsGenericMethod && mi.GetGenericMethodDefinition() = leq ->
+                    Some (l,r)
+                | _ ->
+                    None
+
+        let (|GreaterOrEqual|_|) (e : Expr) =
+            match e with
+                | Call(None, mi, [l;r]) when mi.IsGenericMethod && mi.GetGenericMethodDefinition() = geq ->
+                    Some (l,r)
+                | _ ->
+                    None
+
+        let (|Equality|_|) (e : Expr) =
+            match e with
+                | Call(None, mi, [l;r]) when mi.IsGenericMethod && mi.GetGenericMethodDefinition() = eq ->
+                    Some (l,r)
+                | _ ->
+                    None
+
+        let (|InEquality|_|) (e : Expr) =
+            match e with
+                | Call(None, mi, [l;r]) when mi.IsGenericMethod && mi.GetGenericMethodDefinition() = neq ->
+                    Some (l,r)
+                | _ ->
+                    None
+
 
 module Translation =
     open System
@@ -125,6 +248,14 @@ module Translation =
                 | Some v -> v, s
                 | None -> failwithf "could not get local variable: %A" n
         }
+
+    let private tryResolve (n : string) =
+        { run = fun s -> 
+            match Map.tryFind n s.locals with
+                | Some v -> Some v, s
+                | None -> None, s
+        }
+
 
     let private declare (v : list<Var>) =
         { run = fun s ->
@@ -286,6 +417,83 @@ module Translation =
                     res
 
 
+    module FSharp =
+        open Microsoft.FSharp.Quotations.Patterns
+        open Microsoft.FSharp.Quotations
+        open Microsoft.FSharp.Quotations.DerivedPatterns
+        open Microsoft.FSharp.Quotations.ExprShape
+        open Microsoft.FSharp.Reflection
+
+        let rec endsWithRet (e : Expr) =
+            match e with
+                | Let(v,e,b) ->
+                    endsWithRet b
+                | Sequential(l, r) ->
+                    endsWithRet r
+                | Return(v) ->
+                    Some (v.Type)
+                | IfThenElse(_,l,r) ->
+                    match endsWithRet l, endsWithRet r with
+                        | Some lt, Some rt when lt = rt ->
+                            Some lt
+                        | _ -> 
+                            None
+                | ShapeVar(v) -> None
+                | ShapeLambda(v, b) -> 
+                    None
+                | ShapeCombination(o, args) -> 
+                    None
+
+        let rec removeImperativeReturn(e : Expr) =
+            match e with
+                | Sequential(IfThenElse(cond, i', Value(:? unit,_)), e') ->
+                    match endsWithRet i' with
+                        | Some _ ->
+                            Expr.IfThenElse(cond, removeImperativeReturn i', removeImperativeReturn e')
+                        | _ ->
+                            e
+                | Let(v,e,b) ->
+                    Expr.Let(v, e, removeImperativeReturn b)
+                | Sequential(l, r) ->
+                    Expr.Sequential(l, removeImperativeReturn r)
+                | ShapeLambda(v, b) ->
+                    Expr.Lambda(v, removeImperativeReturn b)
+                | ShapeVar(v) ->
+                    e
+                | ShapeCombination(o, args) ->
+                    e
+
+        let rec removeRetFunctions (e : Expr) =
+            match e with
+                | Return(v) -> v
+                | Let(v,e,b) ->
+                    Expr.Let(v, e, removeRetFunctions b)
+                | Sequential(l, r) ->
+                    Expr.Sequential(removeRetFunctions l, removeRetFunctions r)
+                | ShapeLambda(v,b) ->
+                    Expr.Lambda(v, removeRetFunctions b)
+                | ShapeVar(_) -> e
+                | ShapeCombination(o, args) -> RebuildShapeCombination(o, args |> List.map removeRetFunctions)
+
+        let rec liftUnionConstructors (e : Expr) =
+            match e with
+                | Call(None, mi, args) when FSharpType.IsUnion(mi.DeclaringType) ->
+                    let case = FSharpType.GetUnionCases(mi.DeclaringType) |> Seq.tryFind (fun c -> c.Name = mi.Name)
+                    match case with
+                        | Some case -> Expr.NewUnionCase(case, args)
+                        | None -> Expr.Call(mi, args |> List.map liftUnionConstructors)
+
+                | Value(null, t) when FSharpType.IsUnion t ->
+                    let emptyCase = FSharpType.GetUnionCases t |> Seq.find (fun c -> c.GetFields().Length = 0)
+                    Expr.NewUnionCase(emptyCase, [])
+
+                | ShapeLambda(v,b) -> Expr.Lambda(v, liftUnionConstructors b)
+                | ShapeVar(_) -> e
+                | ShapeCombination(o, args) -> RebuildShapeCombination(o, args |> List.map liftUnionConstructors)
+
+        let prepare (e : Expr) =
+            e |> removeImperativeReturn |> removeRetFunctions |> liftUnionConstructors
+
 
     let rec translateExpression (e : Expression) : Trans<Expr> =
         state {
@@ -323,7 +531,11 @@ module Translation =
                     match t with
                         | Some t ->
                             let! t = translateExpression t
-                            return Expr.Call(t, mi, args)
+
+                            if FSharpType.IsFunction t.Type && mi.Name = "Invoke" then
+                                return Expr.Applications(t, args |> List.map (fun a -> [a]))
+                            else
+                                return Expr.Call(t, mi, args)
                         | None ->
                             return Expr.Call(mi, args)
 
@@ -342,6 +554,71 @@ module Translation =
                         | _ ->
                             let t = e.Annotation<TypeInformation>().InferredType |> Cecil.toType
                             return Expr.Value(null, t)
+
+                | ObjectCreation(t, args) ->
+                    let t = translateType t
+                    let! args = translateExpressions args
+                    
+                    // lambdas
+                    if FSharpType.IsFunction t then
+                        let ctor = t.GetConstructors(BindingFlags.NonPublic ||| BindingFlags.Public ||| BindingFlags.Static ||| BindingFlags.Instance) |> Seq.head
+
+                        let invoke = t.GetMethods() |> Seq.filter (fun mi -> mi.Name = "Invoke") |> Seq.maxBy (fun mi -> mi.GetParameters().Length)
+                        let d = Cecil.disassemble invoke
+
+                        let parameters = ctor.GetParameters() |> Seq.map(fun p -> Var(p.Name, p.ParameterType)) |> Seq.toList
+                        let localValues = List.zip parameters args |> List.map (fun (p,a) -> p, a)
+
+                        let! s = push (localValues |> List.map fst)
+                        let! res = translateMethodDeclaration d
+                        do! pop s
+
+
+                        let rec wrap (locals : list<Var * Expr>) (lambda : Expr) =
+                            match locals with
+                                | [] -> lambda
+                                | (v,e)::locals ->
+                                    match e with
+                                        | Var(ve) when ve.Name = v.Name ->
+                                            let res = wrap locals lambda
+                                            res.Substitute(fun vi -> if vi = v then Some (Expr.Var ve) else None)
+                                        | _ ->
+                                            Expr.Let(v, e, wrap locals lambda)
+
+                        return wrap localValues res
+
+                    elif FSharpType.IsTuple t then
+                        return Expr.NewTuple(args)
+                    else
+                        let ctor = t.GetConstructor(args |> List.map (fun a -> a.Type) |> List.toArray)
+                        return Expr.NewObject(ctor, args)
+
+                | MemberReference(target, name) ->
+                    let! local = tryResolve name
+                    match local with
+                        | Some local -> 
+                            return Expr.Var local
+                        | _ ->
+                            match target with
+                                | :? TypeReferenceExpression as t ->
+                                    return failwith ""
+                                | _ ->
+                                    let! t = translateExpression target
+
+                                    if FSharpType.IsTuple t.Type && name.StartsWith "Item" then
+                                        let index = System.Int32.Parse(name.Substring 4) - 1
+                                        return Expr.TupleGet(t, index)
+                                    else
+                                        let f = t.Type.GetField(name, BindingFlags.Instance ||| BindingFlags.NonPublic ||| BindingFlags.Public)
+                                        let p = t.Type.GetProperty(name, BindingFlags.Instance ||| BindingFlags.NonPublic ||| BindingFlags.Public)
+
+                                        if f <> null then
+                                            return Expr.FieldGet(t, f)
+                                        elif p <> null then
+                                            return Expr.PropertyGet(t, p, [])
+                                        else
+                                            return failwithf "could not get member %A for %A" name t
+
                 | e when e.IsNull ->
                     return Expr.Value(())
                 | _ ->
@@ -355,7 +632,7 @@ module Translation =
                 yield ex
         }
 
-    let rec translateStatements (s : list<AstNode>) =
+    and translateStatements (s : list<AstNode>) =
         state {
             match s with
                 | Block(body)::rest ->
@@ -470,7 +747,7 @@ module Translation =
                     return Expr.Empty
         }
 
-    let translateMethodDeclaration(m : ICSharpCode.NRefactory.CSharp.MethodDeclaration) =
+    and translateMethodDeclaration(m : ICSharpCode.NRefactory.CSharp.MethodDeclaration) : Trans<Expr> =
         state {
             
             let vars = m.Parameters |> Seq.map (fun p -> Var(p.Name, translateType p.Type)) |> Seq.toList
@@ -484,5 +761,6 @@ module Translation =
                     | [] -> b
                     | a::xs -> Expr.Lambda(a, buildLambda xs b)
 
-            return buildLambda vars body
+            let res = buildLambda vars body
+            return res |> FSharp.prepare
         }

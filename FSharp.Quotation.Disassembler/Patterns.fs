@@ -123,6 +123,13 @@ module Patterns =
             | _ ->
                 None
 
+    let (|MemberReference|_|) (n : Expression) =
+        match n with
+            | :? MemberReferenceExpression as r ->
+                Some (MemberReference(r.Target, r.MemberName))
+            | _ ->
+                None
+
     let (|NullStatement|_|) (n : AstNode) =
         if n.IsNull then
             Some (NullStatement)
@@ -172,6 +179,15 @@ module Patterns =
         match n with
             | :? VariableDeclarationStatement as d ->
                 Some (VariableDeclaration(d.Variables |> Seq.toList))
+            | _ ->
+                None
+
+    let (|ObjectCreation|_|) (e : Expression) =
+        match e with
+            | :? ObjectCreateExpression as e ->
+                let args = e.Arguments |> Seq.toList
+                
+                Some (ObjectCreation(e.Type, args))
             | _ ->
                 None
 

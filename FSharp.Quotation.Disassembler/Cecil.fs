@@ -106,3 +106,11 @@ module Cecil =
     let fromMethodInfo (m : MethodInfo) =
         let t = fromType m.DeclaringType
         t.Methods |> Seq.find(fun mi -> mi.MetadataToken.ToInt32() = m.MetadataToken)
+
+    let disassemble (m : MethodInfo) =
+        let m = fromMethodInfo m
+        let ctx = ICSharpCode.Decompiler.DecompilerContext(m.Module)
+        let builder = ICSharpCode.Decompiler.Ast.AstBuilder(ctx)
+        builder.AddType(m.DeclaringType)
+        builder.RunTransformations()
+        builder.SyntaxTree.Descendants |> Seq.find(function :? ICSharpCode.NRefactory.CSharp.MethodDeclaration as mi when mi.Name = m.Name -> true | _ -> false) |> unbox<ICSharpCode.NRefactory.CSharp.MethodDeclaration>
