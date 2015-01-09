@@ -61,6 +61,13 @@
     <Compile Include="Translation.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\TestMethods.CSharp\TestMethods.CSharp.csproj">
+      <Name>TestMethods.CSharp</Name>
+      <Project>{6595a7fd-5378-4308-9a31-5c037d8d911e}</Project>
+      <Private>True</Private>
+    </ProjectReference>
+  </ItemGroup>
   <PropertyGroup>
     <MinimumVisualStudioVersion Condition="'$(MinimumVisualStudioVersion)' == ''">11</MinimumVisualStudioVersion>
   </PropertyGroup>

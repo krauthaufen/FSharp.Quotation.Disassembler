@@ -50,7 +50,7 @@ module Patterns =
                 Some (UnaryOperator(op.Operator, op.Expression))
             | _ ->
                 None
-
+    
     let (|Constant|_|) (n : Expression) =
         
         match n with
@@ -107,7 +107,17 @@ module Patterns =
                             | _ ->
                                 None
                     | _ ->
-                        failwith "invalid InvocationExpression"
+                        None
+            | _ ->
+                None
+
+    let (|LambdaInvocation|_|) (e : Expression) =
+        match e with
+            | :? InvocationExpression as i ->
+                match i.Target with
+                    | :? MemberReferenceExpression -> None
+                    | _ ->
+                        Some (i.Target, i.Arguments |> Seq.toList)
             | _ ->
                 None
 
@@ -136,6 +146,13 @@ module Patterns =
             | _ ->
                 None
 
+    let (|BreakStatement|_|) (n : AstNode) =
+        match n with
+            | :? BreakStatement as r ->
+                Some (BreakStatement)
+            | _ ->
+                None
+
     let (|MemberReference|_|) (n : Expression) =
         match n with
             | :? MemberReferenceExpression as r ->
@@ -156,6 +173,23 @@ module Patterns =
             | _ ->
                 None
 
+    let (|CastExpression|_|) (e : Expression) =
+        match e with
+            | :? CastExpression as e ->
+                Some (CastExpression(e.Type, e.Expression))
+            | _ ->
+                None
+                
+
+    let (|LambdaExpression|_|) (e : Expression) =
+        match e with
+            | :? LambdaExpression as e ->
+                Some (LambdaExpression(e.Parameters |> Seq.toList, e.Body))
+            | :? AnonymousMethodExpression as e ->
+                Some (LambdaExpression(e.Parameters |> Seq.toList, e.Body :> AstNode))
+            | _ ->
+                None
+
     let (|ForStatement|_|) (n : AstNode) =
         match n with
             | :? ForStatement as f ->
@@ -163,6 +197,14 @@ module Patterns =
                 let iter = f.Iterators |> Seq.map (fun a -> a :> AstNode) |> Seq.toList
 
                 Some (ForStatement(init, f.Condition, iter, f.EmbeddedStatement))
+            | _ ->
+                None
+
+    let (|ForeachStatement|_|) (n : AstNode) =
+        match n with
+            | :? ForeachStatement as f ->
+                
+                Some (ForeachStatement(f.VariableType, f.VariableName, f.InExpression, f.EmbeddedStatement))
             | _ ->
                 None
 

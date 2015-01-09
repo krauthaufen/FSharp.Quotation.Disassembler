@@ -33,6 +33,9 @@ module ExpressionExtensions =
     let private geq = methodInfo <@ (>=) @>
     let private eq = methodInfo <@ (=) @>
     let private neq = methodInfo <@ (<>) @>
+    
+    let private emptyArray = [||]
+    let private getArray = methodInfo <@ emptyArray.[0] @>
 
     let private empty = Expr.Value(())
 
@@ -115,6 +118,33 @@ module ExpressionExtensions =
         static member NotEqual(l : Expr, r : Expr) : Expr =
             let m = neq.MakeGenericMethod [|l.Type|]
             Expr.Call(m, [l;r])
+
+        static member ForEach(v : Var, seq : Expr, body : Expr) =
+            let sType = typeof<System.Collections.Generic.IEnumerable<obj>>.GetGenericTypeDefinition().MakeGenericType([|v.Type|])
+            let eType = typeof<System.Collections.Generic.IEnumerator<obj>>.GetGenericTypeDefinition().MakeGenericType([|v.Type|])
+            let e = Var("enumerator", eType)
+
+            let intrinsics = getArray.DeclaringType
+            let unboxDisposable = intrinsics.GetMethod("UnboxGeneric").MakeGenericMethod([|typeof<System.IDisposable>|])
+
+            let getEnumerator = sType.GetMethod("GetEnumerator")
+            let dispose = typeof<System.IDisposable>.GetMethod("Dispose")
+            let moveNext = typeof<System.Collections.IEnumerator>.GetMethod("MoveNext")
+
+            Expr.Let(e, Expr.Call(Expr.Coerce(seq, sType), getEnumerator, []),
+                Expr.TryFinally(
+                    Expr.WhileLoop(Expr.Call(Expr.Var e, moveNext, []),
+                        Expr.Let(v, Expr.PropertyGet(Expr.Var e, eType.GetProperty("Current"), []),
+                            body
+                        )
+                    ),
+                    Expr.IfThenElse(Expr.TypeTest(Expr.Coerce(Expr.Var e, typeof<obj>), typeof<System.IDisposable>),
+                        Expr.Call(Expr.Call(unboxDisposable, [Expr.Coerce(Expr.Var e, typeof<obj>)]), dispose, []),
+                        Expr.Value(())
+                    )
+                )
+            )
+
 
     [<AutoOpen>]
     module Patterns =
@@ -237,6 +267,40 @@ module ExpressionExtensions =
                     Some (l,r)
                 | _ ->
                     None
+
+
+        let private typePrefixPattern = System.Text.RegularExpressions.Regex @"^.*\.(?<methodName>.*)$"
+        let private (|Method|_|)  (mi : MethodInfo) =
+            let args = mi.GetParameters() |> Seq.map(fun p -> p.ParameterType)
+            let parameters = if mi.IsStatic then
+                                args
+                                else
+                                seq { yield mi.DeclaringType; yield! args }
+
+            let m = typePrefixPattern.Match mi.Name
+            let name =
+                if m.Success then m.Groups.["methodName"].Value
+                else mi.Name
+
+            Method (name, parameters |> Seq.toList) |> Some
+
+
+        let (|ForEach|_|) (e : Expr) =
+            match e with
+                | Let(e, Call(Some(Coerce(seq,_)), Method("GetEnumerator",_), []),
+                        TryFinally(
+                            WhileLoop(Call(Some (Var e1), Method("MoveNext",_), []),
+                                Let(i, PropertyGet(Some (Var e2), current, []), b)
+                            ),
+                            IfThenElse(TypeTest(Coerce(Var e3, oType0), dType),
+                                Call(Some (Call(None, Method("UnboxGeneric",_), [Coerce(e4, oType1)])), Method("Dispose",_), []),
+                                Value(_)
+                            )
+                        )
+                    ) when e1 = e && e2 = e && e3 = e && current.Name = "Current" && oType0 = typeof<obj> && oType1 = typeof<obj> && dType = typeof<System.IDisposable> ->
+                    ForEach(i, seq, b) |> Some
+                | _ -> None
+
 
 
 module Translation =
@@ -369,7 +433,7 @@ module Translation =
                     | KnownTypeCode.Decimal -> typeof<Decimal>
                     | KnownTypeCode.DateTime -> typeof<DateTime>
                     | KnownTypeCode.String -> typeof<String>
-                    | KnownTypeCode.Void -> typeof<Void>
+                    | KnownTypeCode.Void -> typeof<unit>
                     | KnownTypeCode.Type -> typeof<Type>
                     | KnownTypeCode.Array -> typeof<Array>
                     | KnownTypeCode.Attribute -> typeof<Attribute>
@@ -646,6 +710,38 @@ module Translation =
                                         else
                                             return failwithf "could not get member %A for %A" name t
 
+                | CastExpression(t, e) ->
+                    let! e = translateExpression e
+                    let t = translateType t
+                    return Expr.Coerce(e, t)
+
+                | LambdaExpression(args, body) ->
+                    let vars = args |> List.map(fun a -> Var(a.Name, translateType a.Type))
+
+                    let! s = push vars
+                    let! body =
+                        match body with
+                            | Expression(e) -> translateExpression e
+                            | s -> translateStatements [s]
+
+                    do! pop s
+
+                    let rec buildLambda (args : list<Var>) (b : Expr) =
+                        match args with
+                            | [] -> b
+                            | a::xs -> Expr.Lambda(a, buildLambda xs b)
+
+                    
+                    return buildLambda vars body
+
+                | LambdaInvocation(l, args) ->
+                    let! args = translateExpressions args
+                    let! l = translateExpression l
+                    let! s = getState
+
+                    return Expr.Applications(l, args |> List.map (fun a -> [a]))
+
+
                 | e when e.IsNull ->
                     return Expr.Value(())
                 | _ ->
@@ -685,7 +781,7 @@ module Translation =
                     
                     let labelsAndBodies = cases |> List.map (fun c -> 
                         let labels = c.CaseLabels |> Seq.map (fun l -> l.Expression) |> Seq.toList
-                        let body = c.Statements |> Seq.toList
+                        let body = c.Statements |> Seq.filter (function BreakStatement -> false | _ -> true) |> Seq.toList
 
                         labels, body
                     )
@@ -726,7 +822,9 @@ module Translation =
 
 
                     let res = buildCases result
-                    return res
+                    let! rest = translateStatements rest
+
+                    return Expr.Seq(res, rest)
 
                 | ForStatement(init, cond, step, body)::rest ->
                     
@@ -769,6 +867,16 @@ module Translation =
                             let! rest = translateStatements rest
                             return Expr.Seq(res, rest)
 
+                | ForeachStatement(vt, vn, seq, body)::rest ->
+                    let v = Var(vn, translateType vt)
+                    let! seq = translateExpression seq
+                    
+                    let! s = push [v]
+                    let! res = translateStatements [body]
+                    do! pop s
+
+                    let! rest = translateStatements rest
+                    return Expr.Seq(Expr.ForEach(v, seq, res), rest)
                             
                 | ReturnStatement(v)::rest ->
                     let! v = translateExpression v
@@ -788,6 +896,23 @@ module Translation =
                             translateExpression value
                         else
                             state { return Expr.DefaultValue(t) }
+
+                    let t = 
+                        if t.FullName.StartsWith "System.Func" || t.FullName.StartsWith "System.Action" then
+                            let targs =
+                                if t.FullName.StartsWith "System.Func" then t.GetGenericArguments()
+                                else Array.append (t.GetGenericArguments()) [|typeof<unit>|]
+
+                            let rec build (t : list<Type>) =
+                                match t with
+                                    | [r] -> r
+                                    | a::t -> FSharpType.MakeFunctionType(a, build t)
+                                    | [] -> failwith "function-type having no generic arguments"
+                            build (targs |> Array.toList)
+
+                        else
+                            t
+
 
                     let v = Var(name, t)
                     let! s = push [v]

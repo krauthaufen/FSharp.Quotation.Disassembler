@@ -2,7 +2,7 @@
 open ICSharpCode.Decompiler.Ast
 open ICSharpCode.Decompiler
 open Microsoft.FSharp.Quotations
-
+open TestMethods.CSharp
 
 module PrettyPrint =
     open Microsoft.FSharp.Reflection
@@ -37,6 +37,8 @@ module PrettyPrint =
 
             | _ ->
                 None
+
+    
 
     let rec private typeStr (t : Type) =
         let removeGenericStuff (name : string) =
@@ -86,6 +88,11 @@ module PrettyPrint =
 
     let rec private str (e : Expr) =
         match e with
+            | ForEach(v, seq, b) ->
+                let seq = str seq
+                let b = str b |> String.indent
+
+                sprintf "for %s in %s do\r\n%s" v.Name seq b
 
             | Let(v, MultiArgLambda(args, b), e) when not v.IsMutable ->
                 let b = str b |> String.indent
@@ -191,7 +198,7 @@ module PrettyPrint =
             | Application(f, a) ->
                 let f = str f
                 let a = str a
-                if not <| a.StartsWith "(" then
+                if not <| a.StartsWith "(" && (a.Contains " " || a.Contains "(") then
                     sprintf "%s (%s)" f a
                 else
                     sprintf "%s %s" f a
@@ -206,6 +213,9 @@ module PrettyPrint =
                 else
                     let t = typeStr t
                     sprintf "Unchecked.defaultof<%s>" t
+
+            | Coerce(v, t) ->
+                sprintf "(%s :> %s)" (str v) (typeStr t)
 
             | NewTuple(args) ->
                 args |> List.map str |> String.concat ", " |> sprintf "(%s)"
@@ -265,7 +275,7 @@ module PrettyPrint =
     let definition (name : string) (e : Expr) =
         match e with
             | MultiArgLambda(args, b) ->
-                let namespaces = allNamespaces e |> Set.remove "Microsoft.FSharp.Core" |> Set.remove null |> Seq.map(fun n -> sprintf "open %s" n)
+                let namespaces = allNamespaces e |> Set.remove "Microsoft.FSharp.Core" |> Set.remove "Microsoft.FSharp.Collections"  |> Set.remove null |> Seq.map(fun n -> sprintf "open %s" n)
 
                 let b = str b |> String.indent
                 let args = args |> List.map(fun v -> sprintf "(%s : %s)" v.Name (typeStr v.Type)) |> String.concat " "
@@ -297,9 +307,16 @@ type Test() =
             | a ->
                 { aa = a; ba = [a;a] }
 
+    static member ForEach(a : list<int>) =
+        let mutable sum = 0
+        for e in a do
+            sum <- sum + e
+        sum
+
+
 [<EntryPoint>]
 let main args =
-    let mi = typeof<Test>.GetMethod "Do"
+    let mi = typeof<TestClass>.GetMethod "Test6"
     let meth = Cecil.disassemble mi
 
     let ex = Translation.translateMethodDeclaration meth

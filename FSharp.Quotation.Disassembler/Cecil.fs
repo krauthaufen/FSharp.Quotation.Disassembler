@@ -44,7 +44,7 @@ module Cecil =
             | "System.Decimal" -> typeof<Decimal>
             | "System.DateTime" -> typeof<DateTime>
             | "System.String" -> typeof<String>
-            | "System.Void" -> typeof<Void>
+            | "System.Void" -> typeof<unit>
             | "System.Type" -> typeof<Type>
             | "System.Array" -> typeof<Array>
             | "System.Attribute" -> typeof<Attribute>
