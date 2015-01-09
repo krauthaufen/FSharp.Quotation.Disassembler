@@ -181,6 +181,17 @@ module PrettyPrint =
             | NewTuple(args) ->
                 args |> List.map str |> String.concat ", " |> sprintf "(%s)"
 
+            | NewUnionCase(c, args) ->
+                let cnt = List.length args
+                let args = args |> List.map str |> String.concat ", "
+
+                if cnt = 0 then
+                    c.Name
+                elif cnt > 1 then
+                    sprintf "%s(%s)" c.Name args
+                else
+                    sprintf "%s %s" c.Name args
+
             | e -> sprintf "%A" e
 
     let rec private allNamespaces (e : Expr) =
@@ -215,10 +226,13 @@ type Test() =
         let other (a,b) =
             a + b
 
-        let mutable v = a
-        while v < 10 do
-            v <- v + other (a,b)
-        (v,a)
+        if a > 0 then
+            let mutable v = a
+            while v < 10 do
+                v <- v + other (a,b)
+            Some(v,a)
+        else
+            None
 
 [<EntryPoint>]
 let main args =
