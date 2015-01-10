@@ -1,3 +1,5 @@
 *.suo
 obj
 /build
+/packages/*
+!/packages/*.config
