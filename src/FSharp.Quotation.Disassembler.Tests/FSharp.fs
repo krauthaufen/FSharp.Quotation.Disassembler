@@ -20,6 +20,7 @@ module ``Disassembler vs ReflectedDefinition`` =
                     let dis = PrettyPrint.definition "dis" defD
                     NUnit.Framework.Assert.Fail(sprintf "disassembled definition is not equal to reflected one:\r\n%s\r\n%s" refl dis)
                 else
+                    printfn "INFO:\r\n%s" (PrettyPrint.String.indent <| PrettyPrint.definition mi.Name defD)
                     ()
 
             | None ->
@@ -156,9 +157,7 @@ module ``Disassembler vs ReflectedDefinition`` =
 
     // #endregion
 
-
     // #region Union Matching
-
 
     let unionMatching (a : Union0) =
         match a with
@@ -172,5 +171,34 @@ module ``Disassembler vs ReflectedDefinition`` =
         check m
 
     // #endregion
-    
+
+    // #region Constant Matching
+
+    let constantMatching (a : string) =
+        match a with
+            | "1" -> 0
+            | "0" -> 1
+            | _ -> 7
+
+    [<Test>]
+    let ``constant matching``() =
+        let m = t.GetMethod "constantMatching"
+        check m
+
+    // #endregion 
    
+    // #region Tuple Matching
+
+    let tupleMatching (a : string) (b : int) =
+        match a,b with
+
+            | "1", 1 -> 0
+            | "0", 2 -> 1
+            | _ -> 7
+
+    [<Test>]
+    let ``tuple matching``() =
+        let m = t.GetMethod "tupleMatching"
+        check m
+
+    // #endregion 

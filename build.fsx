@@ -24,14 +24,21 @@ Target "CompileTests" (fun () ->
     MSBuildRelease "build/Release" "Build" tests |> ignore
 )
 
+
+Target "CompileCoreDebug" (fun () ->
+    MSBuildDebug "build/Debug" "Build" core |> ignore
+)
+
+Target "CompileTestsDebug" (fun () ->
+    MSBuildDebug "build/Debug" "Build" tests |> ignore
+)
+
 Target "RunTests" (fun () ->
-    NUnit (fun p -> { p with OutputFile = "build/TestResults.xml" }) ["build/Release/FSharp.Quotation.Disassembler.Tests.dll"]
+    // tests need to be running in debug since Release
+    // optimizes thing too heavily and quotations are
+    // no longer equal to ReflectedDefinitions
+    NUnit (fun p -> { p with OutputFile = "build/TestResults.xml" }) ["build/Debug/FSharp.Quotation.Disassembler.Tests.dll"]
 )
-
-Target "RunTests-Only" (fun () ->
-    NUnit (fun p -> { p with OutputFile = "build/TestResults.xml" }) ["build/Release/FSharp.Quotation.Disassembler.Tests.dll"]
-)
-
 
 Target "Compile" (fun () -> ())
 Target "Default" (fun () -> ())
@@ -42,11 +49,15 @@ Target "Build" (fun () -> ())
 "Restore" ==> "CompileCore"
 "CompileCore" ==> "CompileTests"
 
+"Restore" ==> "CompileCoreDebug"
+"CompileCoreDebug" ==> "CompileTestsDebug"
+
+
 "CompileCore" ==>
     "CompileTests" ==>
     "Compile"
 
-"CompileTests" ==> "RunTests"
+"CompileTestsDebug" ==> "RunTests"
 
 "Restore" ==> 
     "Compile" ==>
