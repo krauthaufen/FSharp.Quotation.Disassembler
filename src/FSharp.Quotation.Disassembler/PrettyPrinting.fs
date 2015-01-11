@@ -4,7 +4,6 @@ open FSharp.Quotation.Disassembler
 open ICSharpCode.Decompiler.Ast
 open ICSharpCode.Decompiler
 open Microsoft.FSharp.Quotations
-open TestMethods.CSharp
 
 module PrettyPrint =
     open Microsoft.FSharp.Reflection
