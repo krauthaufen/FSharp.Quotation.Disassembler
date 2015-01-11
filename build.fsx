@@ -6,7 +6,7 @@ open System
 open System.IO
 
 let core = ["src/FSharp.Quotation.Disassembler/FSharp.Quotation.Disassembler.fsproj"];
-let tests = ["src/TestMethods.CSharp/TestMethods.CSharp.csproj"; "src/TestMethods.FSharp/TestMethods.FSharp.fsproj"; "src/FSharp.Quotation.Disassembler.Tests/FSharp.Quotation.Disassembler.Tests.fsproj"];
+let tests = ["src/TestMethods.CSharp/TestMethods.CSharp.csproj"; "src/FSharp.Quotation.Disassembler.Tests/FSharp.Quotation.Disassembler.Tests.fsproj"];
 
 Target "Restore" (fun () ->
     RestorePackages()

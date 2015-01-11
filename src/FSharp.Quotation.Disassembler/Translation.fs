@@ -81,7 +81,13 @@ module FSharp =
                     | None -> e
 
             | Call(None, mi, args) when FSharpType.IsUnion(mi.DeclaringType) ->
-                let case = FSharpType.GetUnionCases(mi.DeclaringType) |> Seq.tryFind (fun c -> c.Name = mi.Name)
+                let name =
+                    if mi.Name.StartsWith "New" then
+                        mi.Name.Substring 3
+                    else
+                        mi.Name
+
+                let case = FSharpType.GetUnionCases(mi.DeclaringType) |> Seq.tryFind (fun c -> c.Name = name)
                 match case with
                     | Some case -> Expr.NewUnionCase(case, args |> List.map liftUnionConstructors)
                     | None -> Expr.Call(mi, args |> List.map liftUnionConstructors)
@@ -195,6 +201,15 @@ module FSharp =
             | IfThenElse(Not c, i, e) -> Expr.IfThenElse(c, e, i) |> flipNegativeIfThenElses
             | ShapeCombination(o, args) -> RebuildShapeCombination(o, args |> List.map flipNegativeIfThenElses)
 
+    let rec inlineCopyVariables (e : Expr) : Expr =
+        match e with
+            | Let(vl, Var(vr), e) when not vl.IsMutable ->
+                let e = inlineCopyVariables e
+                e.Substitute (fun vi -> if vi = vl then Some (Expr.Var vr) else None)
+            | ShapeLambda(v,b) -> Expr.Lambda(v, inlineCopyVariables b)
+            | ShapeVar(_) -> e
+            | ShapeCombination(o, args) -> RebuildShapeCombination(o, args |> List.map inlineCopyVariables)      
+
     let prepare (e : Expr) =
         e |> liftUnionConstructors
           |> pushDefaultValueLets 
@@ -202,6 +217,7 @@ module FSharp =
           |> removeImperativeReturn 
           |> removeRetFunctions 
           |> flipNegativeIfThenElses
+          |> inlineCopyVariables
               
 
 module Translation =
@@ -318,7 +334,11 @@ module Translation =
             | UnaryOperatorType.Minus -> Expr.Negate e
             | UnaryOperatorType.Plus -> e
 
-       
+            | UnaryOperatorType.PostIncrement ->
+                match e with
+                    | Var(v) -> Expr.VarSet(v, Expr.Add(e, Expr.Value(1)))
+                    | _ -> failwithf "cannot increment complex expression"
+
 
             | _ -> failwithf "unsupported unary-operator %A" op
 
@@ -452,9 +472,21 @@ module Translation =
                     let! r = translateExpression r 
                     return binary op l r
 
-                | UnaryOperator(op, e) ->
-                    let! e = translateExpression e
-                    return unary op e
+                | UnaryOperator(op, ex) ->
+                    match op with
+                        | UnaryOperatorType.Increment
+                        | UnaryOperatorType.Decrement
+                        | UnaryOperatorType.PostIncrement
+                        | UnaryOperatorType.PostDecrement ->
+                            match e.Parent with
+                                | ExpressionStatement(_) ->
+                                    let! ex = translateExpression ex
+                                    return unary op ex
+                                | _ ->
+                                    return failwith "cannot use increment/decrement in expression"
+                        | _ ->
+                            let! ex = translateExpression ex
+                            return unary op ex
 
                 | Constant(t, value) ->
                     return Expr.Value(value, t)

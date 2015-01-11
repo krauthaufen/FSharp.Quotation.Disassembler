@@ -100,11 +100,6 @@
       <Project>{6595a7fd-5378-4308-9a31-5c037d8d911e}</Project>
       <Private>True</Private>
     </ProjectReference>
-    <ProjectReference Include="..\TestMethods.FSharp\TestMethods.FSharp.fsproj">
-      <Name>TestMethods.FSharp</Name>
-      <Project>{34bea5a0-3d93-4731-9778-f92e751103c7}</Project>
-      <Private>True</Private>
-    </ProjectReference>
   </ItemGroup>
   <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 
        Other similar extension points exist, see Microsoft.Common.targets.
