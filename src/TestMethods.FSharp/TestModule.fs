@@ -1,4 +1,10 @@
 ﻿namespace TestMethods.FSharp
 
-type Class1() = 
-    member this.X = "F#"
+
+[<ReflectedDefinition>]
+module TestModule =
+    type Marker = Marker
+
+    let test0 (a : int) (b : int) =
+        a + b * 2
+

@@ -128,4 +128,5 @@ module Cecil =
         let builder = ICSharpCode.Decompiler.Ast.AstBuilder(ctx)
         builder.AddType(m.DeclaringType)
         builder.RunTransformations()
-        builder.SyntaxTree.Descendants |> Seq.find(function :? ICSharpCode.NRefactory.CSharp.MethodDeclaration as mi when mi.Name = m.Name -> true | _ -> false) |> unbox<ICSharpCode.NRefactory.CSharp.MethodDeclaration>
+        let methods = builder.SyntaxTree.Descendants |> Seq.choose(function :? ICSharpCode.NRefactory.CSharp.MethodDeclaration as m -> Some m | _ -> None) |> Seq.toArray
+        methods |> Seq.find (fun mi -> mi.Annotation<MethodDefinition>() = m)
