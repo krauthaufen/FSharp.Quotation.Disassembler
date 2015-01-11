@@ -1,0 +1,28 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2011/08/nuspec.xsd">
+    <metadata>
+        <id>FSharp.Quotation.Disassembler</id>
+        <version>1.0.0</version>
+        <authors>Georg Haaser</authors>
+        <owners>Georg Haaser</owners>
+        <licenseUrl>http://opensource.org/licenses/Apache-2.0</licenseUrl>
+        <projectUrl>https://github.com/krauthaufen/FSharp.Quotation.Disassembler</projectUrl>
+        <requireLicenseAcceptance>false</requireLicenseAcceptance>
+        <title>FSharp.Quotation.Disassembler</title>
+        <description>FSharp.Quotation.Disassembler extends ICSharpCode.Decompiler (part of ILSpy) with a disassembler creating F#'s Quasi-Quotations</description>
+        <summary>FSharp.Quotation.Disassembler extends ICSharpCode.Decompiler (part of ILSpy) with a disassembler creating F#'s Quasi-Quotations</summary>
+        <releaseNotes>initial version of nuget package</releaseNotes>
+		<copyright>Copyright © 2015 Georg Haaser, A-1200 Wien, Austria.</copyright>
+        <language>en-US</language>
+        <tags>fsharp quotation reflection disassembler</tags>
+        <dependencies>
+            <dependency id="Mono.Cecil" version="0.9.5.4" />
+        </dependencies>
+    </metadata>
+    <files>
+        <file src="..\build\Release\ICSharpCode.NRefactory.dll" target="lib\net45\ICSharpCode.NRefactory.dll" />
+        <file src="..\build\Release\ICSharpCode.NRefactory.CSharp.dll" target="lib\net45\ICSharpCode.NRefactory.CSharp.dll" />
+        <file src="..\build\Release\ICSharpCode.Decompiler.dll" target="lib\net45\ICSharpCode.Decompiler.dll" />
+        <file src="..\build\Release\FSharp.Quotation.Disassembler.dll" target="lib\net45\FSharp.Quotation.Disassembler.dll" />
+    </files>
+</package>
