@@ -28,6 +28,10 @@ Target "RunTests" (fun () ->
     NUnit (fun p -> { p with OutputFile = "build/TestResults.xml" }) ["build/Release/FSharp.Quotation.Disassembler.Tests.dll"]
 )
 
+Target "RunTests-Only" (fun () ->
+    NUnit (fun p -> { p with OutputFile = "build/TestResults.xml" }) ["build/Release/FSharp.Quotation.Disassembler.Tests.dll"]
+)
+
 
 Target "Compile" (fun () -> ())
 Target "Default" (fun () -> ())

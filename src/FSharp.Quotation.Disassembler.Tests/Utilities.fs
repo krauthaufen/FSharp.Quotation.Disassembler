@@ -42,6 +42,9 @@ module Extensions =
             let rec check (varMapping : System.Collections.Generic.Dictionary<Var, Var>) (l : Expr) (r : Expr) =
                 match l,r with
                     
+                    | el, Let(v0, er, Var(v1)) | Let(v0, el, Var(v1)), er when v0 = v1 ->
+                        check varMapping el er
+
                     | ShapeVar(vl), ShapeVar(vr) ->
                         match varMapping.TryGetValue vl with
                             | (true, vr') when vr' <> vr ->

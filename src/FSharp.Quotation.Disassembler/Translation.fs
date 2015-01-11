@@ -742,7 +742,10 @@ module Translation =
                     let! e = translateExpression e
 
                     if t.IsNested && FSharpType.IsUnion t.DeclaringType then
-                        let n = t.Name
+                        let n = 
+                            if t.Name.StartsWith "_" then t.Name.Substring 1
+                            else t.Name
+
                         let case = FSharpType.GetUnionCases t.DeclaringType |> Seq.find (fun c -> c.Name = n)
                         return Expr.UnionCaseTest(e, case)
                     else

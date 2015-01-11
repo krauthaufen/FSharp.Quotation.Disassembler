@@ -9,8 +9,6 @@ open System.IO
 [<ReflectedDefinition>]
 module ``Disassembler vs ReflectedDefinition`` =
     type Marker = Marker
-
-
     let private t = typeof<Marker>.DeclaringType
 
     let private check (mi : MethodInfo) =
@@ -26,9 +24,6 @@ module ``Disassembler vs ReflectedDefinition`` =
 
             | None ->
                 failwith "could not get reflected definition"
-
-    
-
 
 
     //#region Let and Arithmetics
@@ -161,5 +156,21 @@ module ``Disassembler vs ReflectedDefinition`` =
 
     // #endregion
 
+
+    // #region Union Matching
+
+
+    let unionMatching (a : Union0) =
+        match a with
+            | A a -> a
+            | B a -> a
+            | C -> 0
+
+    [<Test>]
+    let ``union matching``() =
+        let m = t.GetMethod "unionMatching"
+        check m
+
+    // #endregion
     
    
