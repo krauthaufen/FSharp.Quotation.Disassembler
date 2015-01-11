@@ -147,6 +147,9 @@ module PrettyPrint =
             | BitwiseAnd(l,r) -> sprintf "%s &&& %s" (str l) (str r)
             | BitwiseOr(l,r) -> sprintf "%s ||| %s" (str l) (str r)
             | BitwiseExclusiveOr(l,r) -> sprintf "%s ^^^ %s" (str l) (str r)
+            | LeftShift(l, r) -> sprintf "%s <<< %s" (str l) (str r)
+            | RightShift(l, r) -> sprintf "%s >>> %s" (str l) (str r)
+
             | SmallerThan(l,r) -> sprintf "%s < %s" (str l) (str r)
             | GreaterThan(l,r) -> sprintf "%s > %s" (str l) (str r)
             | SmallerOrEqual(l,r) -> sprintf "%s <= %s" (str l) (str r)
@@ -154,6 +157,7 @@ module PrettyPrint =
             | Equality(l,r) -> sprintf "%s = %s" (str l) (str r)
             | InEquality(l,r) -> sprintf "%s <> %s" (str l) (str r)
 
+            
             | Not(e) -> sprintf "not <| %s" (str e)
 
             | ArrayGet(arr, index) ->

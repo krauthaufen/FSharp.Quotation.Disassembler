@@ -6,7 +6,7 @@ open System
 open System.IO
 
 let core = ["src/FSharp.Quotation.Disassembler/FSharp.Quotation.Disassembler.fsproj"];
-let tests = ["src/TestMethods.CSharp/TestMethods.CSharp.csproj"; "src/TestMethods.FSharp/TestMethods.FSharp.fsproj"; "src/FSharp.Quotation.Disassembler.Tests/FSharp.Quotation.Disassembler.Tests.fsproj"];
+let tests = ["src/TestMethods.CSharp/TestMethods.CSharp.csproj"; "src/FSharp.Quotation.Disassembler.Tests/FSharp.Quotation.Disassembler.Tests.fsproj"];
 
 Target "Restore" (fun () ->
     RestorePackages()
@@ -25,6 +25,21 @@ Target "CompileTests" (fun () ->
 )
 
 
+Target "CompileCoreDebug" (fun () ->
+    MSBuildDebug "build/Debug" "Build" core |> ignore
+)
+
+Target "CompileTestsDebug" (fun () ->
+    MSBuildDebug "build/Debug" "Build" tests |> ignore
+)
+
+Target "RunTests" (fun () ->
+    // tests need to be running in debug since Release
+    // optimizes thing too heavily and quotations are
+    // no longer equal to ReflectedDefinitions
+    NUnit (fun p -> { p with OutputFile = "build/TestResults.xml" }) ["build/Debug/FSharp.Quotation.Disassembler.Tests.dll"]
+)
+
 Target "Compile" (fun () -> ())
 Target "Default" (fun () -> ())
 Target "Rebuild" (fun () -> ())
@@ -34,9 +49,15 @@ Target "Build" (fun () -> ())
 "Restore" ==> "CompileCore"
 "CompileCore" ==> "CompileTests"
 
+"Restore" ==> "CompileCoreDebug"
+"CompileCoreDebug" ==> "CompileTestsDebug"
+
+
 "CompileCore" ==>
     "CompileTests" ==>
     "Compile"
+
+"CompileTestsDebug" ==> "RunTests"
 
 "Restore" ==> 
     "Compile" ==>

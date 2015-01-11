@@ -10,12 +10,48 @@ open ICSharpCode.NRefactory.TypeSystem
 open Mono.Cecil
 open System.Reflection
 
+module Dict =
+    open System.Collections.Generic
+
+    let empty<'k, 'v when 'k : equality> = Dictionary<'k, 'v>()
+
+    let ofList (l : list<'k * 'v>) =
+        let res = Dictionary()
+        for (k,v) in l do res.[k] <- v
+        res
+
+    let tryFind (key : 'k) (d : Dictionary<'k, 'v>) =
+        match d.TryGetValue key with
+            | (true, v) -> Some v
+            | _ -> None
+
 module FSharp =
     open Microsoft.FSharp.Quotations.Patterns
     open Microsoft.FSharp.Quotations
     open Microsoft.FSharp.Quotations.DerivedPatterns
     open Microsoft.FSharp.Quotations.ExprShape
     open Microsoft.FSharp.Reflection
+
+    let private meth (e : Expr) =
+        let rec tryGetMeth (e : Expr) =
+            match e with
+                | Call(_, mi, _) -> Some mi
+                | ShapeLambda(_, b) -> tryGetMeth b
+                | ShapeVar(_) -> None
+                | ShapeCombination(o, args) ->
+                    args |> List.tryPick tryGetMeth
+
+        match tryGetMeth e with
+            | Some m -> m
+            | None -> failwithf "expression does not contain a call: %A" e
+
+    let private methodof (e : Expr) =
+        meth e
+
+    let private methoddefof (e : Expr) =
+        let m = meth e
+        if m.IsGenericMethod then m.GetGenericMethodDefinition()
+        else m
 
     let rec endsWithRet (e : Expr) =
         match e with
@@ -25,10 +61,13 @@ module FSharp =
                 endsWithRet r
             | Return(v) ->
                 Some (v.Type)
+            | Empty ->
+                Some null
             | IfThenElse(_,l,r) ->
                 match endsWithRet l, endsWithRet r with
-                    | Some lt, Some rt when lt = rt ->
-                        Some lt
+                    | Some lt, Some rt when lt = null || rt = null || lt = rt ->
+                        if lt = null then Some rt
+                        else Some lt
                     | _ -> 
                         None
             | ShapeVar(v) -> None
@@ -42,9 +81,9 @@ module FSharp =
             | Sequential(IfThenElse(cond, i', Value(:? unit,_)), e') ->
                 match endsWithRet i' with
                     | Some _ ->
-                        Expr.IfThenElse(cond, removeImperativeReturn i', removeImperativeReturn e')
+                        Expr.IfThenElse(cond, removeImperativeReturn i', removeImperativeReturn e') |> removeImperativeReturn
                     | _ ->
-                        e
+                        Expr.Sequential(Expr.IfThenElse(cond, removeImperativeReturn i', Expr.Value(())), removeImperativeReturn e')
             | Let(v,e,b) ->
                 Expr.Let(v, e, removeImperativeReturn b)
             | Sequential(l, r) ->
@@ -55,6 +94,57 @@ module FSharp =
                 e
             | ShapeCombination(o, args) ->
                 RebuildShapeCombination(o, args |> List.map removeImperativeReturn)
+
+
+    let removeImperativeReturn2 (e : Expr) =
+        let rec remove (e : Expr) (rest : Expr) : Option<Expr> =
+            
+            match e with
+                | IfThenElse(c, i, Value(:? unit, _)) ->
+                    match endsWithRet i with
+                        | Some _ ->
+                            match remove i rest with
+                                | Some i ->
+                                    Some (Expr.IfThenElse(c, i, rest))
+                                | None ->
+                                    Some (Expr.IfThenElse(c, i, rest))
+                        | None ->
+                            failwith "could not remove imperative return"
+                | Sequential(Sequential(s0, s1), s2) ->
+                    remove s0 (Expr.Seq(s1, s2))
+
+                | Sequential(l, r) ->
+                    match remove l (Expr.Seq(r, rest)) with
+                        | Some l -> Some l
+                        | None ->
+                            match remove r rest with
+                                | Some r -> Expr.Seq(l, r) |> Some
+                                | None -> None
+
+                | ShapeVar(_) ->
+                    None
+
+                | ShapeLambda(v, b) ->
+                    match remove b rest with
+                        | Some b ->
+                            Expr.Lambda(v, b) |> Some
+                        | None ->
+                            None
+                | ShapeCombination(o, args) ->
+                    let tr = args |> List.map (fun e -> remove e rest)
+                    if tr |> List.exists (function Some _ -> true | _ -> false) then
+                        let zip = List.zip tr args
+                        let args = zip |> List.map (function (Some r,_) -> r | (None, e) -> e)
+                        RebuildShapeCombination(o, args) |> Some
+                    else
+                        None
+
+        let mutable last = e
+        let mutable res = remove e Expr.Empty
+        while res.IsSome do
+            last <- res.Value
+            res <- remove res.Value Expr.Empty
+        last
 
     let rec removeRetFunctions (e : Expr) =
         match e with
@@ -81,7 +171,13 @@ module FSharp =
                     | None -> e
 
             | Call(None, mi, args) when FSharpType.IsUnion(mi.DeclaringType) ->
-                let case = FSharpType.GetUnionCases(mi.DeclaringType) |> Seq.tryFind (fun c -> c.Name = mi.Name)
+                let name =
+                    if mi.Name.StartsWith "New" then
+                        mi.Name.Substring 3
+                    else
+                        mi.Name
+
+                let case = FSharpType.GetUnionCases(mi.DeclaringType) |> Seq.tryFind (fun c -> c.Name = name)
                 match case with
                     | Some case -> Expr.NewUnionCase(case, args |> List.map liftUnionConstructors)
                     | None -> Expr.Call(mi, args |> List.map liftUnionConstructors)
@@ -195,13 +291,47 @@ module FSharp =
             | IfThenElse(Not c, i, e) -> Expr.IfThenElse(c, e, i) |> flipNegativeIfThenElses
             | ShapeCombination(o, args) -> RebuildShapeCombination(o, args |> List.map flipNegativeIfThenElses)
 
+    let rec inlineCopyVariables (e : Expr) : Expr =
+        match e with
+            | Let(vl, Var(vr), e) when not vl.IsMutable ->
+                let e = inlineCopyVariables e
+                e.Substitute (fun vi -> if vi = vl then Some (Expr.Var vr) else None)
+            | ShapeLambda(v,b) -> Expr.Lambda(v, inlineCopyVariables b)
+            | ShapeVar(_) -> e
+            | ShapeCombination(o, args) -> RebuildShapeCombination(o, args |> List.map inlineCopyVariables)      
+
+
+    let private staticMethodMapping =
+        Dict.ofList [
+            methodof <@ System.String.Equals : string * string -> bool @>, 
+            methodof <@ (=) : string -> string -> bool @>
+
+        ]
+
+    let rec replaceKnownStaticMethods (e : Expr) =
+        match e with
+            | Call(None, mi, args) ->
+                match Dict.tryFind mi staticMethodMapping with
+                    | Some mi ->
+                        Expr.Call(mi, args |> List.map replaceKnownStaticMethods)
+                    | None ->
+                        Expr.Call(mi, args |> List.map replaceKnownStaticMethods)
+                
+            | ShapeLambda(v,b) -> Expr.Lambda(v, replaceKnownStaticMethods b)
+            | ShapeVar(_) -> e
+            | ShapeCombination(o, args) -> RebuildShapeCombination(o, args |> List.map replaceKnownStaticMethods)    
+
+
     let prepare (e : Expr) =
         e |> liftUnionConstructors
           |> pushDefaultValueLets 
           |> adjustMutableVariables
-          |> removeImperativeReturn 
+          //|> removeImperativeReturn 
+          |> removeImperativeReturn2
           |> removeRetFunctions 
           |> flipNegativeIfThenElses
+          |> inlineCopyVariables
+          |> replaceKnownStaticMethods
               
 
 module Translation =
@@ -318,7 +448,11 @@ module Translation =
             | UnaryOperatorType.Minus -> Expr.Negate e
             | UnaryOperatorType.Plus -> e
 
-       
+            | UnaryOperatorType.PostIncrement ->
+                match e with
+                    | Var(v) -> Expr.VarSet(v, Expr.Add(e, Expr.Value(1)))
+                    | _ -> failwithf "cannot increment complex expression"
+
 
             | _ -> failwithf "unsupported unary-operator %A" op
 
@@ -452,9 +586,21 @@ module Translation =
                     let! r = translateExpression r 
                     return binary op l r
 
-                | UnaryOperator(op, e) ->
-                    let! e = translateExpression e
-                    return unary op e
+                | UnaryOperator(op, ex) ->
+                    match op with
+                        | UnaryOperatorType.Increment
+                        | UnaryOperatorType.Decrement
+                        | UnaryOperatorType.PostIncrement
+                        | UnaryOperatorType.PostDecrement ->
+                            match e.Parent with
+                                | ExpressionStatement(_) ->
+                                    let! ex = translateExpression ex
+                                    return unary op ex
+                                | _ ->
+                                    return failwith "cannot use increment/decrement in expression"
+                        | _ ->
+                            let! ex = translateExpression ex
+                            return unary op ex
 
                 | Constant(t, value) ->
                     return Expr.Value(value, t)
@@ -710,7 +856,10 @@ module Translation =
                     let! e = translateExpression e
 
                     if t.IsNested && FSharpType.IsUnion t.DeclaringType then
-                        let n = t.Name
+                        let n = 
+                            if t.Name.StartsWith "_" then t.Name.Substring 1
+                            else t.Name
+
                         let case = FSharpType.GetUnionCases t.DeclaringType |> Seq.find (fun c -> c.Name = n)
                         return Expr.UnionCaseTest(e, case)
                     else
@@ -849,8 +998,10 @@ module Translation =
 
                     let rec buildCases (cases : list<Expr * Expr>) =
                         match cases with
-                            | [(_, e)] ->
+                            | [(Value(:? bool,_), e)] ->
                                 e
+                            | [c, e] ->
+                                Expr.IfThenElse(c, e, Expr.Empty)
                             | (l,e)::cases ->
                                 Expr.IfThenElse(l, e, buildCases cases)
                             | [] ->

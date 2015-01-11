@@ -296,8 +296,12 @@ module Patterns =
 
     let subtractOne (e : Expr) =
         match e with
-            | Call(None, add, [v;Value((:? int as c), _)]) | Call(None, add, [Value((:? int as c), _); v]) when add.Name = "op_Addition" && c = 1 ->
-                v
+            | Value(:? int as v, _) ->
+                Expr.Value(v - 1)
+
+            | Call(None, add, [Value(:? int as l, _); Value(:? int as r, _)]) when add.Name = "op_Addition" ->
+                Expr.Value(l + r - 1)
+
             | Call(None, add, [v;Value((:? int as c), _)]) | Call(None, add, [Value((:? int as c), _); v]) when add.Name = "op_Addition" ->
                 let c1 = c - 1
                 if c1 = 0 then
