@@ -37,7 +37,7 @@ Target "RunTests" (fun () ->
     // tests need to be running in debug since Release
     // optimizes thing too heavily and quotations are
     // no longer equal to ReflectedDefinitions
-    NUnit (fun p -> { p with OutputFile = "build/TestResults.xml" }) ["build/Debug/FSharp.Quotation.Disassembler.Tests.dll"]
+    NUnit (fun p -> { p with OutputFile = "build/Debug/TestResults.xml" }) ["build/Debug/FSharp.Quotation.Disassembler.Tests.dll"]
 )
 
 Target "Compile" (fun () -> ())
