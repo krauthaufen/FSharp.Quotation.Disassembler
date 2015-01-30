@@ -211,7 +211,7 @@ module PrettyPrint =
 
                             l |> Seq.toList |> List.rev |> List.map (fun arr -> arr |> String.concat ", " |> brackets) |> String.concat " "
                         | None ->
-                            args |> String.concat ", "
+                            args |> String.concat ", " |> brackets
 
                 match t with
                     | Some t ->
