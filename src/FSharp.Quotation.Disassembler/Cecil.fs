@@ -137,7 +137,11 @@ module Cecil =
         let m = fromMethodInfo m
         let ctx = ICSharpCode.Decompiler.DecompilerContext(m.Module)
         let builder = ICSharpCode.Decompiler.Ast.AstBuilder(ctx)
-        builder.AddType(m.DeclaringType)
+        
+        ctx.CurrentType <- m.DeclaringType
+        builder.AddMethod(m)
+        //builder.AddType(m.DeclaringType)
+        
         builder.RunTransformations()
         let methods = builder.SyntaxTree.Descendants |> Seq.choose(function :? ICSharpCode.NRefactory.CSharp.MethodDeclaration as m -> Some m | _ -> None) |> Seq.toArray
         methods |> Seq.find (fun mi -> mi.Annotation<MethodDefinition>() = m)

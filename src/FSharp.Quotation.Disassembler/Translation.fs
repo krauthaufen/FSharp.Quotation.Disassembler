@@ -100,7 +100,7 @@ module FSharp =
         let rec remove (e : Expr) (rest : Expr) : Option<Expr> =
             
             match e with
-                | IfThenElse(c, i, Value(:? unit, _)) when e.Type <> typeof<unit> ->
+                | IfThenElse(c, i, Value(:? unit, _)) ->
                     match endsWithRet i with
                         | Some _ ->
                             match remove i rest with
@@ -109,7 +109,8 @@ module FSharp =
                                 | None ->
                                     Some (Expr.IfThenElse(c, i, rest))
                         | None ->
-                            failwith "could not remove imperative return"
+                            if i.Type = typeof<unit> then None
+                            else failwith "could not remove imperative return"
                 | Sequential(Sequential(s0, s1), s2) ->
                     remove s0 (Expr.Seq(s1, s2))
 
