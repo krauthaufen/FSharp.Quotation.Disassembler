@@ -88,14 +88,30 @@ module Cecil =
         match mr with
             | :? GenericInstanceMethod as mr ->
                 let margs = mr.GenericArguments |> Seq.map (toType genArgs) |> Seq.toArray
-                let targs = mr.DeclaringType.GenericParameters |> Seq.map (toType genArgs) |> Seq.toArray
+                let targs = 
+                    match mr.DeclaringType with
+                        | :? GenericInstanceType as t ->
+                            t.GenericArguments |> Seq.map (toType genArgs) |> Seq.toArray
+                        | t -> t.GenericParameters |> Seq.map (toType genArgs) |> Seq.toArray
 
                 m.ResolveMethod(mr.MetadataToken.ToInt32(), targs, margs)
+
+
             | _ ->
                 let margs = mr.GenericParameters |> Seq.map (toType genArgs) |> Seq.toArray
-                let targs = mr.DeclaringType.GenericParameters |> Seq.map (toType genArgs) |> Seq.toArray
+                let targs = 
+                    match mr.DeclaringType with
+                        | :? GenericInstanceType as t ->
+                            t.GenericArguments |> Seq.map (toType genArgs) |> Seq.toArray
+                        | t -> t.GenericParameters |> Seq.map (toType genArgs) |> Seq.toArray
 
-                m.ResolveMethod(mr.MetadataToken.ToInt32(), targs, margs)
+                let isGen = mr.Parameters |> Seq.exists (fun p -> p.ParameterType.IsGenericParameter || p.ParameterType.HasGenericParameters)
+
+                if isGen then
+                    //TODO: hack
+                    m.ResolveMethod(mr.MetadataToken.ToInt32(), targs, targs)
+                else
+                    m.ResolveMethod(mr.MetadataToken.ToInt32(), targs, margs)
 
     let toMemberInfo (genArgs : Map<string, Type>) (cr : MethodReference) =
         let m = toModule cr.Module
@@ -143,5 +159,15 @@ module Cecil =
         //builder.AddType(m.DeclaringType)
         
         builder.RunTransformations()
-        let methods = builder.SyntaxTree.Descendants |> Seq.choose(function :? ICSharpCode.NRefactory.CSharp.MethodDeclaration as m -> Some m | _ -> None) |> Seq.toArray
-        methods |> Seq.find (fun mi -> mi.Annotation<MethodDefinition>() = m)
+        let methods = builder.SyntaxTree.Descendants 
+                        |> Seq.choose(fun d ->
+                            match d with
+                                | :? ICSharpCode.NRefactory.CSharp.MethodDeclaration as mi when mi.Annotation<MethodDefinition>() = m-> 
+                                    Some (mi.Parameters, mi.ReturnType, mi.Body) 
+                                | :? ICSharpCode.NRefactory.CSharp.OperatorDeclaration as o when o.Annotation<MethodDefinition>() = m ->
+                                    Some (o.Parameters, o.ReturnType, o.Body) 
+                                | _ -> None
+                           ) 
+                        |> Seq.toArray
+
+        methods |> Seq.head

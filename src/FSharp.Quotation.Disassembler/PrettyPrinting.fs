@@ -364,6 +364,10 @@ module PrettyPrint =
 
                 List.zip fields args |> List.map (fun (f,a) -> sprintf "%s = %s" f.Name (str a)) |> String.concat "; " |> sprintf "{ %s }"
 
+            | NewObject(ctor, args) ->
+                let t = typeStr ctor.DeclaringType
+                args |> List.map str |> String.concat ", " |> sprintf "%s(%s)" t
+
             | e -> sprintf "%A" e
 
     let rec private allNamespaces (e : Expr) =

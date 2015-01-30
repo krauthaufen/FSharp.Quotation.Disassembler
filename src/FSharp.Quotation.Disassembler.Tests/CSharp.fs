@@ -17,7 +17,21 @@ module ``CSharp Tests`` =
         printfn "%s" (PrettyPrint.definition "RotationX" d)
 
     [<Test>]
-    let ``Fun Max``() =
+    let ``M44d Rotation``() =
+        let m = typeof<M44d>.GetMethod("Rotation", [|typeof<V3d>; typeof<float>|])
+        let d = Expr.GetDisassembledDefinition m
+        printfn "%s" (PrettyPrint.definition "Rotation" d)
+
+
+    [<Test>]
+    let ``Rot3d cast to M44d``() =
+        let m = methodInfo <@ Rot3d.op_Explicit : Rot3d -> M44d @>
+        let d = Expr.GetDisassembledDefinition m
+        printfn "%s" (PrettyPrint.definition "Rotation" d)
+
+
+    [<Test>]
+    let ``QuickSort``() =
         let t = typeof<Aardvark.Base.SortingExtensions>
         let m1 = t.GetMethods(BindingFlags.Static ||| BindingFlags.NonPublic ||| BindingFlags.Public) |> Seq.maxBy (fun m -> 
                 if m.Name = "QuickSort" then

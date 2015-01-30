@@ -616,7 +616,19 @@ module Translation =
             elif tout = typeof<float32> then float32Cast.MakeGenericMethod [|tin|]
             elif tout = typeof<float> then floatCast.MakeGenericMethod [|tin|]
             elif tout = typeof<decimal> then decimalCast.MakeGenericMethod [|tin|]
-            else failwithf "unsupported conversion from %A to %A" tin tout
+            else 
+                // try find an explicit or implicit conversion-function in the
+                // in-/output types
+                let flags = BindingFlags.Static ||| BindingFlags.Public
+                let convert = 
+                    Seq.append (tin.GetMethods flags) (tout.GetMethods flags)
+                        |> Seq.filter (fun m -> m.GetParameters().Length = 1)
+                        |> Seq.filter (fun m -> m.Name = "op_Implicit" || m.Name = "op_Explicit")
+                        |> Seq.tryFind (fun m -> m.ReturnType = tout && m.GetParameters().[0].ParameterType = tin)
+                
+                match convert with
+                    | Some c -> c
+                    | None -> failwithf "unsupported conversion from %A to %A" tin tout
 
 
 
@@ -1213,13 +1225,13 @@ module Translation =
                     return Expr.Empty
         }
 
-    and translateMethodDeclaration(m : ICSharpCode.NRefactory.CSharp.MethodDeclaration) : Trans<Expr> =
+    and translateMethodDeclaration (parameters : AstNodeCollection<ParameterDeclaration>, returnType : AstType, body : BlockStatement) : Trans<Expr> =
         state {
             let! genArgs = genericArguments
-            let vars = m.Parameters |> Seq.map (fun p -> Var(p.Name, translateType genArgs p.Type)) |> Seq.toList
+            let vars = parameters |> Seq.map (fun p -> Var(p.Name, translateType genArgs p.Type)) |> Seq.toList
             do! declare vars
-            do! setReturnType (translateType genArgs m.ReturnType)
-            let! body = translateStatements [m.Body]
+            do! setReturnType (translateType genArgs returnType)
+            let! body = translateStatements [body]
 
 
             let rec buildLambda (args : list<Var>) (b : Expr) =

@@ -203,39 +203,15 @@ module ``Disassembler vs ReflectedDefinition`` =
 
     // #endregion 
 
-    
+    // #region Generic function
 
-
-    type IdBuilder() =
-        member x.Return(v) = fun () -> v
-        member x.Delay(f) = f()
-        member x.Run(f) = f()
-        member x.For(s : seq<'a>, f : 'a -> unit -> unit) =
-            fun () ->
-                for e in s do
-                    f e ()
-        member x.While(c : unit -> bool, f : unit -> unit) =
-            fun () ->
-                while c() do
-                    f()
-        member x.Zero() = fun () -> ()
-        member x.Combine(l, r) =
-            fun () ->
-                l()
-                r()
-
-    let id = IdBuilder()
-
-    let builder(a : seq<int>) =
-        id {
-            let r = ref 0
-            for e in a do
-                r := !r + e
-            return !r
-        }
+    let genericSingleElementList (a : 'a) =
+        [a]
 
     [<Test>]
-    let ``identity builder test``() =
-        let m = t.GetMethod "builder"
+    let ``generic list singleton``() =
+        let m = (t.GetMethod "genericSingleElementList").MakeGenericMethod [|typeof<int>|]
         check m
+
+    // #endregion
 
