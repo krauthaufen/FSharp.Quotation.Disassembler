@@ -100,7 +100,7 @@ module FSharp =
         let rec remove (e : Expr) (rest : Expr) : Option<Expr> =
             
             match e with
-                | IfThenElse(c, i, Value(:? unit, _)) ->
+                | IfThenElse(c, i, Value(:? unit, _)) when e.Type <> typeof<unit> ->
                     match endsWithRet i with
                         | Some _ ->
                             match remove i rest with
@@ -360,6 +360,16 @@ module Translation =
             (), { s with locals = v |> List.fold (fun m v -> Map.add v.Name v m) s.locals}
         }
 
+    let private getGenericArgument (n : string) =
+        { run = fun s ->
+            Map.find n s.genericArguments, s
+        }
+
+    let private genericArguments  =
+        { run = fun s ->
+            s.genericArguments, s
+        }
+
     let private push (v : list<Var>) =
         { run = fun s ->
             s, { s with locals = v |> List.fold (fun m v -> Map.add v.Name v m) s.locals}
@@ -459,7 +469,7 @@ module Translation =
 
             | _ -> failwithf "unsupported unary-operator %A" op
 
-    let rec private translateType (t : AstType) =
+    let rec private translateType (genArgs : Map<string, Type>) (t : AstType) =
         match t with
             | :? PrimitiveType as p ->
                 match p.KnownTypeCode with
@@ -508,16 +518,22 @@ module Translation =
 
             | :? SimpleType as s ->
                 let ta = t.Annotation<TypeReference>()
-                let res = Cecil.toType ta
 
-                if res.IsGenericType then
-                    let targs = s.TypeArguments |> Seq.map translateType |> Seq.toArray
-                    res.MakeGenericType targs
+                if ta <> null then
+                    let res = Cecil.toType genArgs ta
+
+                    if res.IsGenericType then
+                        let targs = s.TypeArguments |> Seq.map (translateType genArgs) |> Seq.toArray
+                        res.MakeGenericType targs
+                    else
+                        res
                 else
-                    res
+                    match Map.tryFind s.Identifier genArgs with
+                        | Some t -> t
+                        | None -> failwith "asdasdasd"
 
             | :? ComposedType as c ->
-                let t = translateType c.BaseType
+                let t = translateType genArgs c.BaseType
                 if c.HasNullableSpecifier then
                     typedefof<Nullable<_>>.MakeGenericType [|t|]
                 elif c.ArraySpecifiers.Count > 0 then
@@ -532,15 +548,17 @@ module Translation =
                     t
 
             | _ ->
+                
                 let ta = t.Annotation<TypeReference>()
            
-                let res = Cecil.toType ta
+                let res = Cecil.toType genArgs ta
 
                 if res.IsGenericType && ta.IsGenericInstance then
-                    let targs = ta.GenericParameters |> Seq.map Cecil.toType |> Seq.toArray
+                    let targs = ta.GenericParameters |> Seq.map (Cecil.toType genArgs) |> Seq.toArray
                     res.MakeGenericType targs
                 else
                     res
+
 
     let private translateConversion =
         let sbyteCast = methodInfo <@ sbyte @>
@@ -639,7 +657,8 @@ module Translation =
                         | MemberReference(target, name) ->
                             match target with
                                 | :? TypeReferenceExpression as t ->
-                                    let t = translateType t.Type
+                                    let! genArgs = genericArguments
+                                    let t = translateType genArgs t.Type
                                     let f = t.GetField(name, BindingFlags.Instance ||| BindingFlags.NonPublic ||| BindingFlags.Public)
                                     let p = t.GetProperty(name, BindingFlags.Instance ||| BindingFlags.NonPublic ||| BindingFlags.Public)
 
@@ -659,18 +678,34 @@ module Translation =
                         | _ ->
                             return failwith "only variables can be assigned to a value"
                     
-                | Invocation(t, mi, args) ->    
+                | InvocationNew(target, ref, args) ->
                     let! args = translateExpressions args
-                    match t with
-                        | Some t ->
-                            let! t = translateExpression t
+                    let! genArgs = genericArguments
+                    match target with
+                        | Some target ->
+                            let! target = translateExpression target
 
-                            if FSharpType.IsFunction t.Type && mi.Name = "Invoke" then
-                                return Expr.Applications(t, args |> List.map (fun a -> [a]))
+                            if FSharpType.IsFunction target.Type && ref.Name = "Invoke" then
+                                return Expr.Applications(target, args |> List.map (fun a -> [a]))
                             else
-                                return Expr.Call(t, mi, args)
+                                let mi = Cecil.toMethodInfo genArgs ref |> unbox<_>
+                                return Expr.Call(target, mi, args)
                         | None ->
+                            let mi = Cecil.toMethodInfo genArgs ref |> unbox<_>
                             return Expr.Call(mi, args)
+
+//                | Invocation(t, mi, args) ->    
+//                    let! args = translateExpressions args
+//                    match t with
+//                        | Some t ->
+//                            let! t = translateExpression t
+//
+//                            if FSharpType.IsFunction t.Type && mi.Name = "Invoke" then
+//                                return Expr.Applications(t, args |> List.map (fun a -> [a]))
+//                            else
+//                                return Expr.Call(t, mi, args)
+//                        | None ->
+//                            return Expr.Call(mi, args)
 
                 | IfElseStatement(cond, Expression(t), Expression(f)) ->
                     let! cond = translateExpression cond
@@ -685,6 +720,7 @@ module Translation =
 
 
                 | NullExpression ->
+                    let! genArgs = genericArguments
                     match e.Parent with
                         | ReturnStatement(_) ->
                             let! t = getReturnType
@@ -696,19 +732,20 @@ module Translation =
 
                             let ti = ta.Annotation<TypeInformation>()
                             let vi = ta.Annotation<ICSharpCode.Decompiler.ILAst.ILVariable>()
-
+                            
                             let t = 
-                                if ti <> null then ti.InferredType |> Cecil.toType
-                                elif vi <> null then vi.Type |> Cecil.toType
+                                if ti <> null then ti.InferredType |> Cecil.toType genArgs
+                                elif vi <> null then vi.Type |> Cecil.toType genArgs
                                 else failwith "could not determine type for null-expression"
 
                             return Expr.Value(null, t)
                         | _ ->
-                            let t = e.Annotation<TypeInformation>().InferredType |> Cecil.toType
+                            let t = e.Annotation<TypeInformation>().InferredType |> Cecil.toType genArgs
                             return Expr.Value(null, t)
 
                 | ObjectCreation(t, args) ->
-                    let t = translateType t
+                    let! genArgs = genericArguments
+                    let t = translateType genArgs t
                     let! args = translateExpressions args
                     
                     // lambdas
@@ -759,7 +796,8 @@ module Translation =
                         | _ ->
                             match target with
                                 | :? TypeReferenceExpression as t ->
-                                    let t = translateType t.Type
+                                    let! genArgs = genericArguments
+                                    let t = translateType genArgs t.Type
 
                                     let f = t.GetField(name, BindingFlags.Static ||| BindingFlags.NonPublic ||| BindingFlags.Public)
                                     let p = t.GetProperty(name, BindingFlags.Static ||| BindingFlags.NonPublic ||| BindingFlags.Public)
@@ -803,8 +841,9 @@ module Translation =
 
 
                 | CastExpression(t, e) ->
+                    let! genArgs = genericArguments
                     let! e = translateExpression e
-                    let t = translateType t
+                    let t = translateType genArgs t
 
                     if t.IsAssignableFrom e.Type then
                         return Expr.Coerce(e, t)
@@ -829,7 +868,8 @@ module Translation =
                         return Expr.Call(conversion, [e])
 
                 | LambdaExpression(args, body) ->
-                    let vars = args |> List.map(fun a -> Var(a.Name, translateType a.Type))
+                    let! genArgs = genericArguments
+                    let vars = args |> List.map(fun a -> Var(a.Name, translateType genArgs a.Type))
 
                     let! s = push vars
                     let! body =
@@ -852,10 +892,15 @@ module Translation =
                     let! l = translateExpression l
                     let! s = getState
 
-                    return Expr.Applications(l, args |> List.map (fun a -> [a]))
+                    if FSharpType.IsFunction l.Type then
+                        return Expr.Applications(l, args |> List.map (fun a -> [a]))
+                    else
+                        let invoke = l.Type.GetMethod("Invoke", args |> List.map (fun a -> a.Type) |> List.toArray)
+                        return Expr.Call(l, invoke, args)
 
                 | TypeTestExpression(t, e) ->
-                    let t = translateType t
+                    let! genArgs = genericArguments
+                    let t = translateType genArgs t
                     let! e = translateExpression e
 
                     if t.IsNested && FSharpType.IsUnion t.DeclaringType then
@@ -869,7 +914,8 @@ module Translation =
                         return failwith "type-tests not implemented"
 
                 | TypeOfExpression(t) ->
-                    let t = translateType t
+                    let! genArgs = genericArguments
+                    let t = translateType genArgs t
                     return Expr.Value(t)
 
                 | QueryExpression(clauses) ->
@@ -1058,7 +1104,8 @@ module Translation =
                             return Expr.Seq(res, rest)
 
                 | ForeachStatement(vt, vn, seq, body)::rest ->
-                    let v = Var(vn, translateType vt)
+                    let! genArgs = genericArguments
+                    let v = Var(vn, translateType genArgs vt)
                     let! seq = translateExpression seq
                     
                     let! s = push [v]
@@ -1079,7 +1126,8 @@ module Translation =
 
                 | (VariableDeclaration [Init(name, value)] as decl)::rest ->
                     let decl = decl |> unbox<VariableDeclarationStatement>
-                    let t = translateType decl.Type
+                    let! genArgs = genericArguments
+                    let t = translateType genArgs decl.Type
 
                     let! value =
                         if not value.IsNull then
@@ -1141,10 +1189,10 @@ module Translation =
 
     and translateMethodDeclaration(m : ICSharpCode.NRefactory.CSharp.MethodDeclaration) : Trans<Expr> =
         state {
-            
-            let vars = m.Parameters |> Seq.map (fun p -> Var(p.Name, translateType p.Type)) |> Seq.toList
+            let! genArgs = genericArguments
+            let vars = m.Parameters |> Seq.map (fun p -> Var(p.Name, translateType genArgs p.Type)) |> Seq.toList
             do! declare vars
-            do! setReturnType (translateType m.ReturnType)
+            do! setReturnType (translateType genArgs m.ReturnType)
             let! body = translateStatements [m.Body]
 
 

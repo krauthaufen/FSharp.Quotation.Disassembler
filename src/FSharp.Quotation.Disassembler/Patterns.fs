@@ -65,7 +65,7 @@ module Patterns =
                 let ti = n.Annotation<TypeInformation>()
                 if ti <> null then
                     let t = ti.InferredType
-                    Some (Constant(Cecil.toType t, p.Value))
+                    Some (Constant(Cecil.toType Map.empty t, p.Value))
                 else
                     Some (Constant(p.Value.GetType(), p.Value))
             | _ ->
@@ -97,26 +97,56 @@ module Patterns =
             | _ ->
                 None
 
-    let (|Invocation|_|) (e : Expression) =
+    let (|InvocationNew|_|) (e : Expression) =
         match e with
             | :? InvocationExpression as i ->
                 match i.Target with
                     | :? MemberReferenceExpression as mr ->
                         let ref = i.Annotation<MethodReference>()
-                        let mi = Cecil.toMethodInfo ref
-
-                        match mi with
-                            | :? MethodInfo as mi ->
-                                if mi.IsStatic then
-                                    Some (Invocation(None, mi, i.Arguments |> Seq.toList))
-                                else
-                                    Some (Invocation(Some mr.Target, mi, i.Arguments |> Seq.toList))
-                            | _ ->
-                                None
+                        let def = ref.Resolve()
+                        
+                        if def.IsStatic then
+                            let isExt = def.CustomAttributes |> Seq.exists(fun a -> Cecil.toType Map.empty a.AttributeType = typeof<System.Runtime.CompilerServices.ExtensionAttribute>)
+                            if isExt && mr.Target <> null && not mr.Target.IsNull then
+                                let args = mr.Target::(i.Arguments |> Seq.toList)
+                                Some (None, ref, args)
+                            else
+                                Some (None, ref, i.Arguments |> Seq.toList)
+                        else
+                            Some (Some mr.Target, ref, i.Arguments |> Seq.toList)
+  
                     | _ ->
                         None
             | _ ->
-                None
+                None 
+
+//    let (|Invocation|_|) (e : Expression) =
+//        match e with
+//            | :? InvocationExpression as i ->
+//                match i.Target with
+//                    | :? MemberReferenceExpression as mr ->
+//                        let ref = i.Annotation<MethodReference>()
+//                        let targs = mr.TypeArguments |> Seq.map (fun t -> t.Annotation<TypeReference>()) |> Seq.toArray
+//                        let mi = Cecil.toMethodInfo ref
+//
+//                        match mi with
+//                            | :? MethodInfo as mi ->
+//                                
+//                                if mi.IsStatic then
+//                                    let isExt = mi.GetCustomAttribute<System.Runtime.CompilerServices.ExtensionAttribute>() <> null
+//                                    if isExt && mr.Target <> null && not mr.Target.IsNull then
+//                                        let args = mr.Target::(i.Arguments |> Seq.toList)
+//                                        Some (Invocation(None, mi, args))
+//                                    else
+//                                        Some (Invocation(None, mi, i.Arguments |> Seq.toList))
+//                                else
+//                                    Some (Invocation(Some mr.Target, mi, i.Arguments |> Seq.toList))
+//                            | _ ->
+//                                None
+//                    | _ ->
+//                        None
+//            | _ ->
+//                None
 
     let (|LambdaInvocation|_|) (e : Expression) =
         match e with

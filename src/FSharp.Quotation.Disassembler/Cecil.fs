@@ -29,10 +29,10 @@ module Cecil =
         let ass = AppDomain.CurrentDomain.GetAssemblies() |> Seq.find (fun a -> a.FullName = m.FullName)
         ass.Modules |> Seq.head
 
-    let rec toType (t : TypeReference) : Type =
+    let rec toType (genArgs : Map<string, Type>) (t : TypeReference) : Type =
         match t with
             | :? ArrayType as arr ->
-                let t = toType arr.ElementType
+                let t = toType genArgs arr.ElementType
                 t.MakeArrayType()
             | _ ->
                 match t.FullName with
@@ -70,27 +70,38 @@ module Cecil =
                     | "System.Threading.Tasks.Task.Task" -> typeof<System.Threading.Tasks.Task>
                     | "System.IDisposable" -> typeof<IDisposable>
                     | _ -> 
-                        match t with
-                            | :? GenericInstanceType as g ->
-                                let t = toType g.ElementType
-                                let args = g.GenericArguments |> Seq.map toType |> Seq.toArray
-                                t.MakeGenericType args
-                            | _ ->
-                                let m = toModule t.Module
-                                m.ResolveType(t.MetadataToken.ToInt32())
+                        if t.IsGenericParameter then
+                            Map.find t.Name genArgs
+                        else
+                            match t with
+                                | :? GenericInstanceType as g ->
+                                    let t = toType genArgs g.ElementType
+                                    let args = g.GenericArguments |> Seq.map (toType genArgs) |> Seq.toArray
+                                    t.MakeGenericType args
+                                | _ ->
+                                    let m = toModule t.Module
+                                    m.ResolveType(t.MetadataToken.ToInt32())
 
-    let toMethodInfo (mr : MethodReference) =
+    let toMethodInfo (genArgs : Map<string, Type>) (mr : MethodReference) =
         let m = toModule mr.Module
-        let margs = mr.GenericParameters |> Seq.map toType |> Seq.toArray
-        let targs = mr.DeclaringType.GenericParameters |> Seq.map toType |> Seq.toArray
 
-        m.ResolveMethod(mr.MetadataToken.ToInt32(), targs, margs)
+        match mr with
+            | :? GenericInstanceMethod as mr ->
+                let margs = mr.GenericArguments |> Seq.map (toType genArgs) |> Seq.toArray
+                let targs = mr.DeclaringType.GenericParameters |> Seq.map (toType genArgs) |> Seq.toArray
 
-    let toMemberInfo (cr : MethodReference) =
+                m.ResolveMethod(mr.MetadataToken.ToInt32(), targs, margs)
+            | _ ->
+                let margs = mr.GenericParameters |> Seq.map (toType genArgs) |> Seq.toArray
+                let targs = mr.DeclaringType.GenericParameters |> Seq.map (toType genArgs) |> Seq.toArray
+
+                m.ResolveMethod(mr.MetadataToken.ToInt32(), targs, margs)
+
+    let toMemberInfo (genArgs : Map<string, Type>) (cr : MethodReference) =
         let m = toModule cr.Module
 
-        let margs = cr.GenericParameters |> Seq.map toType |> Seq.toArray
-        let targs = cr.DeclaringType.GenericParameters |> Seq.map toType |> Seq.toArray
+        let margs = cr.GenericParameters |> Seq.map (toType genArgs) |> Seq.toArray
+        let targs = cr.DeclaringType.GenericParameters |> Seq.map (toType genArgs) |> Seq.toArray
 
         m.ResolveMember(cr.MetadataToken.ToInt32(), targs, margs)
 

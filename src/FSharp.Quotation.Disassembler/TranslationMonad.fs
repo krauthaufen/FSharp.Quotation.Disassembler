@@ -3,7 +3,7 @@
 open System
 open Microsoft.FSharp.Quotations
 
-type TranslationState = { returnType : Type; locals : Map<string, Var> }
+type TranslationState = { genericArguments : Map<string, Type>; returnType : Type; locals : Map<string, Var> }
 type Trans<'a> = State<TranslationState, 'a>
 type TranslationResult = Trans<Expr>
 

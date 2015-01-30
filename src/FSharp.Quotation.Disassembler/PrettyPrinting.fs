@@ -239,6 +239,9 @@ module PrettyPrint =
                 let i = str i |> String.indent
 
                 match e with
+                    | Value(:? unit, _) ->
+                        sprintf "if %s then\r\n%s" c i
+
                     | IfThenElse(_,_,_) ->
                         let e = str e
                         sprintf "if %s then\r\n%s\r\nel%s" c i e
