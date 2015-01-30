@@ -97,8 +97,20 @@ module PrettyPrint =
                                 t.Name
 
     
+    let rec private cstr (e : Expr) =
+        match e with
+            | IfThenElse(a, Value(:? bool as v, _), b) when v = true ->
+                // OR
+                sprintf "%s || %s" (cstr a) (cstr b)
 
-    let rec private str (e : Expr) =
+            | IfThenElse(a, b, Value(:? bool as v, _)) when v = false ->
+                // AND
+                sprintf "%s && %s" (cstr a) (cstr b)
+
+            | e ->
+                str e
+
+    and str (e : Expr) : string =
         match e with
             | ForEach(v, seq, b) ->
                 let seq = str seq
@@ -222,19 +234,6 @@ module PrettyPrint =
 
 
             | IfThenElse(c, i, e) ->
-                let rec cstr (e : Expr) =
-                    match e with
-                        | IfThenElse(a, Value(:? bool as v, _), b) when v = true ->
-                            // OR
-                            sprintf "%s || %s" (cstr a) (cstr b)
-
-                        | IfThenElse(a, b, Value(:? bool as v, _)) when v = false ->
-                            // AND
-                            sprintf "%s && %s" (cstr a) (cstr b)
-
-                        | e ->
-                            str e
-
                 let c = cstr c
                 let i = str i |> String.indent
 
@@ -250,13 +249,13 @@ module PrettyPrint =
                         let e = str e |> String.indent
                         sprintf "if %s then\r\n%s\r\nelse\r\n%s" c i e
             | WhileLoop(c, b) ->
-                let c = str c
+                let c = cstr c
                 let b = str b |> String.indent
                 sprintf "while %s do\r\n%s" c b
 
             | ForIntegerRangeLoop(v, s, e, b) ->
                 let s = str s
-                let e = str e
+                let e = cstr e
                 let b = str b |> String.indent
 
                 sprintf "for %s in %s..%s do\r\n%s" v.Name s e b

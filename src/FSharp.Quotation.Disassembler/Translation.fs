@@ -266,6 +266,8 @@ module FSharp =
                 | ShapeVar(_) -> Set.empty
                 | ShapeCombination(o, args) -> args |> List.fold (fun s e -> Set.union s (getMutableVariables e)) Set.empty
 
+        
+
         let rec substitute (m : Map<Var, Var>) (e : Expr) =
             match e with
                 | Let(v, e, b) ->
@@ -275,7 +277,11 @@ module FSharp =
                             | None -> v
                     Expr.Let(v, substitute m e, substitute m b)
 
-                | ShapeLambda(v,b) -> Expr.Lambda(v, substitute m b)
+                
+
+                | ShapeLambda(v,b) -> 
+                    Expr.Lambda(v, substitute m b)
+
                 | ShapeVar(v) ->
                     match Map.tryFind v m with
                         | Some m -> Expr.Var m
@@ -283,9 +289,28 @@ module FSharp =
                 | ShapeCombination(o, args) ->
                     RebuildShapeCombination(o, args |> List.map (substitute m))
 
+        let rec hideMutableFunctionArguments (m : Map<Var, Var>) (variables : list<Var * Var>) (e : Expr) =
+            match e with
+                | Lambda(v, b) ->
+                    match Map.tryFind v m with
+                        | Some v' -> 
+                            Expr.Lambda(v, hideMutableFunctionArguments m ((v,v')::variables) b)
+                        | None ->
+                            Expr.Lambda(v, hideMutableFunctionArguments m variables b)
+                | e ->
+                    let rec buildLets (l : list<Var* Var>) (e : Expr) =
+                        match l with
+                            | [] -> e
+                            | (v,v')::r -> 
+                                Expr.Let(v', Expr.Var v, buildLets r e)
+
+                    buildLets variables e
+
         let mutables = getMutableVariables e
         let mapping = mutables |> Seq.map (fun v -> v, Var(v.Name, v.Type, true)) |> Map.ofSeq
-        substitute mapping e
+        let e = substitute mapping e
+        hideMutableFunctionArguments mapping [] e
+
 
     let rec flipNegativeIfThenElses (e : Expr) =
         match e with
