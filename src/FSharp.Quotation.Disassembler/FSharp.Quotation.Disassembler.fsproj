@@ -47,6 +47,7 @@
     <Compile Include="ExpressionExtensions.fs" />
     <Compile Include="Translation.fs" />
     <Compile Include="PrettyPrinting.fs" />
+    <Compile Include="Main.fs" />
     <Content Include="packages.config" />
   </ItemGroup>
   <ItemGroup>

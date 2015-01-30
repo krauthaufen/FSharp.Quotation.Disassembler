@@ -202,3 +202,38 @@ module ``Disassembler vs ReflectedDefinition`` =
         check m
 
     // #endregion 
+
+
+    type IdBuilder() =
+        member x.Return(v) = fun () -> v
+        member x.Delay(f) = f()
+        member x.Run(f) = f()
+        member x.For(s : seq<'a>, f : 'a -> unit -> unit) =
+            fun () ->
+                for e in s do
+                    f e ()
+        member x.While(c : unit -> bool, f : unit -> unit) =
+            fun () ->
+                while c() do
+                    f()
+        member x.Zero() = fun () -> ()
+        member x.Combine(l, r) =
+            fun () ->
+                l()
+                r()
+
+    let id = IdBuilder()
+
+    let builder(a : seq<int>) =
+        id {
+            let r = ref 0
+            for e in a do
+                r := !r + e
+            return !r
+        }
+
+    [<Test>]
+    let ``identity builder test``() =
+        let m = t.GetMethod "builder"
+        check m
+

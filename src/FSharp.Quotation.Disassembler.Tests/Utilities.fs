@@ -30,13 +30,6 @@ module Extensions =
             List.isEmpty d.diffs
 
     type Expr with
-        static member GetDisassembledDefinition(mb : MethodInfo) : Expr =
-            let meth = Cecil.disassemble mb
-
-            let res = Translation.translateMethodDeclaration meth
-            let ex,_ = res.run { locals = Map.empty; returnType = null }
-            ex
-
 
         static member Equivalent(l : Expr, r : Expr) =
             let rec check (varMapping : System.Collections.Generic.Dictionary<Var, Var>) (l : Expr) (r : Expr) =
@@ -44,6 +37,10 @@ module Extensions =
                     
                     | el, Let(v0, er, Var(v1)) | Let(v0, el, Var(v1)), er when v0 = v1 ->
                         check varMapping el er
+
+
+                    | Application(Lambda(vl, bl), el), Let(vr, er, br)  |  Let(vl, el, bl), Application(Lambda(vr, br), er) ->
+                        Expr.Equivalent(Expr.Let(vl, el, bl), Expr.Let(vr, er, br))
 
                     | ShapeVar(vl), ShapeVar(vr) ->
                         match varMapping.TryGetValue vl with

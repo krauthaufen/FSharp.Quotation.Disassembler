@@ -165,10 +165,13 @@ module FSharp =
     let rec liftUnionConstructors (e : Expr) =
         match e with
             | PropertyGet(None, p, []) ->
-                let case = FSharpType.GetUnionCases(p.DeclaringType) |> Seq.tryFind (fun c -> c.Name = p.Name)
-                match case with
-                    | Some case -> Expr.NewUnionCase(case, [])
-                    | None -> e
+                if FSharpType.IsUnion p.DeclaringType then
+                    let case = FSharpType.GetUnionCases(p.DeclaringType) |> Seq.tryFind (fun c -> c.Name = p.Name)
+                    match case with
+                        | Some case -> Expr.NewUnionCase(case, [])
+                        | None -> e
+                else
+                    Expr.PropertyGet(p, [])
 
             | Call(None, mi, args) when FSharpType.IsUnion(mi.DeclaringType) ->
                 let name =

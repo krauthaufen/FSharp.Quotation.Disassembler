@@ -118,11 +118,11 @@ module Cecil =
         let m = fromModule t.Module
         m.Types |> Seq.collect flattenNested |> Seq.find(fun ti -> ti.MetadataToken.ToInt32() = t.MetadataToken)
 
-    let fromMethodInfo (m : MethodInfo) =
+    let fromMethodInfo (m : MethodBase) =
         let t = fromType m.DeclaringType
         t.Methods |> Seq.find(fun mi -> mi.MetadataToken.ToInt32() = m.MetadataToken)
-
-    let disassemble (m : MethodInfo) =
+        
+    let disassemble (m : MethodBase) =
         let m = fromMethodInfo m
         let ctx = ICSharpCode.Decompiler.DecompilerContext(m.Module)
         let builder = ICSharpCode.Decompiler.Ast.AstBuilder(ctx)
