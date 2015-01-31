@@ -174,7 +174,12 @@ module Patterns =
             | _ ->
                 None
 
-    
+    let (|CheckedStatement|_|) (n : AstNode) =
+        match n with
+            | :? CheckedStatement as s ->
+                Some (s.Body)
+            | _ ->
+                None
 
     let (|ReturnStatement|_|) (n : AstNode) =
         match n with
@@ -300,6 +305,20 @@ module Patterns =
         match e with
             | :? QueryExpression as e ->
                 Some (e.Clauses |> Seq.toList)
+            | _ -> 
+                None
+
+    let (|CheckedExpression|_|) (e : Expression) =
+        match e with
+            | :? CheckedExpression as e ->
+                Some (e.Expression)
+            | _ -> 
+                None
+
+    let (|ThisExpression|_|) (e : Expression) =
+        match e with
+            | :? ThisReferenceExpression as e ->
+                Some ()
             | _ -> 
                 None
 

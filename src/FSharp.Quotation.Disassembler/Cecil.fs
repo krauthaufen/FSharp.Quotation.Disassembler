@@ -149,8 +149,8 @@ module Cecil =
         let t = fromType m.DeclaringType
         t.Methods |> Seq.find(fun mi -> mi.MetadataToken.ToInt32() = m.MetadataToken)
         
-    let disassemble (m : MethodBase) =
-        let m = fromMethodInfo m
+    let disassemble (mb : MethodBase) =
+        let m = fromMethodInfo mb
         let ctx = ICSharpCode.Decompiler.DecompilerContext(m.Module)
         let builder = ICSharpCode.Decompiler.Ast.AstBuilder(ctx)
         
@@ -163,9 +163,12 @@ module Cecil =
                         |> Seq.choose(fun d ->
                             match d with
                                 | :? ICSharpCode.NRefactory.CSharp.MethodDeclaration as mi when mi.Annotation<MethodDefinition>() = m-> 
-                                    Some (mi.Parameters, mi.ReturnType, mi.Body) 
+                                    if mb.IsStatic then
+                                        Some (None, mi.Parameters, mi.ReturnType, mi.Body) 
+                                    else
+                                        Some (Some mb.DeclaringType, mi.Parameters, mi.ReturnType, mi.Body) 
                                 | :? ICSharpCode.NRefactory.CSharp.OperatorDeclaration as o when o.Annotation<MethodDefinition>() = m ->
-                                    Some (o.Parameters, o.ReturnType, o.Body) 
+                                    Some (None, o.Parameters, o.ReturnType, o.Body) 
                                 | _ -> None
                            ) 
                         |> Seq.toArray

@@ -161,6 +161,21 @@ module FSharp =
                 let i = removeRetFunctions i
                 let e = removeRetFunctions e
                 Expr.IfThenElse(c, i, e)
+
+            | WhileLoop(guard, body) ->
+                let body = removeRetFunctions body
+                if body.Type = typeof<unit> then
+                    Expr.WhileLoop(guard, body)
+                else
+                    failwith "detected return in while loop"
+
+            | ForIntegerRangeLoop(v, s, e, body) ->
+                let body = removeRetFunctions body
+                if body.Type = typeof<unit> then
+                    Expr.ForIntegerRangeLoop(v, s, e, body)
+                else
+                    failwith "detected return in for loop"
+
             | ShapeCombination(o, args) -> RebuildShapeCombination(o, args |> List.map removeRetFunctions)
 
     let rec liftUnionConstructors (e : Expr) =
@@ -490,6 +505,8 @@ module Translation =
             | UnaryOperatorType.PostIncrement ->
                 match e with
                     | Var(v) -> Expr.VarSet(v, Expr.Add(e, Expr.Value(1)))
+                    | FieldGet(Some t, f) -> Expr.FieldSet(t, f, Expr.Add(e, Expr.Value(1)))
+                    | FieldGet(None, f) -> Expr.FieldSet(f, Expr.Add(e, Expr.Value(1)))
                     | _ -> failwithf "cannot increment complex expression"
 
 
@@ -601,6 +618,7 @@ module Translation =
         let float32Cast = methodInfo <@ float32 @> 
         let floatCast = methodInfo <@ float @> 
         let decimalCast = methodInfo <@ decimal @>
+        let unboxMeth = methodInfo <@ unbox : obj -> obj @>
 
         fun (tin : Type) (tout : Type) ->
             if tout = typeof<sbyte> then floatCast.MakeGenericMethod [|tin|]
@@ -628,7 +646,9 @@ module Translation =
                 
                 match convert with
                     | Some c -> c
-                    | None -> failwithf "unsupported conversion from %A to %A" tin tout
+                    | None -> 
+                        unboxMeth.MakeGenericMethod [|tout|]
+                        //failwithf "unsupported conversion from %A to %A" tin tout
 
 
 
@@ -656,7 +676,14 @@ module Translation =
                                     let! ex = translateExpression ex
                                     return unary op ex
                                 | _ ->
-                                    return failwith "cannot use increment/decrement in expression"
+                                    let! ex = translateExpression ex
+
+                                    match op with
+                                        | UnaryOperatorType.Increment -> return Expr.PreIncrementExpression(ex)
+                                        | UnaryOperatorType.Decrement -> return Expr.PreDecrementExpression(ex)
+                                        | UnaryOperatorType.PostIncrement -> return Expr.PostIncrementExpression(ex)
+                                        | UnaryOperatorType.PostDecrement -> return Expr.PostDecrementExpression(ex)
+                                        | _ -> return failwith "unknown operator"
                         | _ ->
                             let! ex = translateExpression ex
                             return unary op ex
@@ -759,24 +786,46 @@ module Translation =
 
                 | NullExpression ->
                     let! genArgs = genericArguments
+
+                    let rec tryGetType (e : Expression) =
+                        let ti = e.Annotation<TypeInformation>()
+                        let vi = e.Annotation<ICSharpCode.Decompiler.ILAst.ILVariable>()
+                        let fi = e.Annotation<FieldReference>()
+
+                        if ti <> null then ti.InferredType |> Cecil.toType genArgs |> Some
+                        elif vi <> null then vi.Type |> Cecil.toType genArgs |> Some
+                        elif fi <> null then fi.FieldType |> Cecil.toType genArgs |> Some
+                        else
+                            match e with
+                                | Assignment(_,l,r) ->
+                                    match tryGetType l with
+                                        | Some lt -> Some lt
+                                        | None -> tryGetType r
+                                | _ -> None
+
                     match e.Parent with
                         | ReturnStatement(_) ->
                             let! t = getReturnType
                             return Expr.Value(null, t)
+
                         | Expression(BinaryOperator((BinaryOperatorType.Equality | BinaryOperatorType.InEquality), l,r)) ->
                             let ta = 
                                 if l = e then r
                                 else l
 
-                            let ti = ta.Annotation<TypeInformation>()
-                            let vi = ta.Annotation<ICSharpCode.Decompiler.ILAst.ILVariable>()
-                            
-                            let t = 
-                                if ti <> null then ti.InferredType |> Cecil.toType genArgs
-                                elif vi <> null then vi.Type |> Cecil.toType genArgs
-                                else failwith "could not determine type for null-expression"
-
-                            return Expr.Value(null, t)
+                            match tryGetType ta with
+                                | Some t -> return Expr.Value(null, t)
+                                | None -> return failwith "could not determine type for null-expression"
+//
+//                            let ti = ta.Annotation<TypeInformation>()
+//                            let vi = ta.Annotation<ICSharpCode.Decompiler.ILAst.ILVariable>()
+//                            
+//                            let t = 
+//                                if ti <> null then ti.InferredType |> Cecil.toType genArgs
+//                                elif vi <> null then vi.Type |> Cecil.toType genArgs
+//                                else failwith "could not determine type for null-expression"
+//
+//                            return Expr.Value(null, t)
                         | _ ->
                             let t = e.Annotation<TypeInformation>().InferredType |> Cecil.toType genArgs
                             return Expr.Value(null, t)
@@ -961,6 +1010,14 @@ module Translation =
 
                 | e when e.IsNull ->
                     return Expr.Value(())
+
+                | CheckedExpression(e) ->
+                    return! translateExpression e
+
+                | ThisExpression ->
+                    let! v = resolve "this"
+                    return Expr.Var v
+
                 | _ ->
                     return failwithf "unknown expression: %A" e
         }
@@ -1048,6 +1105,9 @@ module Translation =
 
                     let! rest = translateStatements rest
                     return Expr.Seq(res, rest)
+                    
+                | CheckedStatement(body)::rest ->
+                    return! translateStatements ((body :> AstNode)::rest)
 
                 | SwitchStatement(value, cases)::rest ->
                     
@@ -1225,10 +1285,18 @@ module Translation =
                     return Expr.Empty
         }
 
-    and translateMethodDeclaration (parameters : AstNodeCollection<ParameterDeclaration>, returnType : AstType, body : BlockStatement) : Trans<Expr> =
+    and translateMethodDeclaration (this : Option<Type>, parameters : AstNodeCollection<ParameterDeclaration>, returnType : AstType, body : BlockStatement) : Trans<Expr> =
         state {
             let! genArgs = genericArguments
             let vars = parameters |> Seq.map (fun p -> Var(p.Name, translateType genArgs p.Type)) |> Seq.toList
+
+            let vars = 
+                match this with
+                    | Some this ->
+                        Var("this", this)::vars
+                    | None ->
+                        vars
+
             do! declare vars
             do! setReturnType (translateType genArgs returnType)
             let! body = translateStatements [body]

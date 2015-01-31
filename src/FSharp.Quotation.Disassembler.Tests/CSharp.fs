@@ -31,6 +31,12 @@ module ``CSharp Tests`` =
 
 
     [<Test>]
+    let ``Qr Factorize``() =
+        let m = methodInfo <@ fun (arr : float[]) -> arr.QrFactorize : int64 * int64 * int64 * int64 * int64 * float[] -> unit @>
+        let d = Expr.GetDisassembledDefinition m
+        printfn "%s" (PrettyPrint.definition "QrFactorize" d)
+
+    [<Test>]
     let ``QuickSort``() =
         let t = typeof<Aardvark.Base.SortingExtensions>
         let m1 = t.GetMethods(BindingFlags.Static ||| BindingFlags.NonPublic ||| BindingFlags.Public) |> Seq.maxBy (fun m -> 
@@ -44,3 +50,10 @@ module ``CSharp Tests`` =
 
         let d = Expr.GetDisassembledDefinition m
         printfn "%s" (PrettyPrint.definition "QuickSort" d)
+
+    [<Test>]
+    let ``List add``() =
+        let m = methodInfo <@ fun (arr : System.Collections.Generic.List<int>) -> arr.Add(1) @>
+
+        let d = Expr.GetDisassembledDefinition m
+        printfn "%s" (PrettyPrint.definition "List<int>.Add" d)

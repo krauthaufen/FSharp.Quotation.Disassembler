@@ -61,7 +61,132 @@ module ExpressionExtensions =
         else
             None
 
+    let private genericOneMethod = methodInfo <@ LanguagePrimitives.GenericOne : int @>
+    let private genericZeroMethod = methodInfo <@ LanguagePrimitives.GenericZero : int @>
+
     type Expr with
+
+        static member Zero(t : System.Type) =
+            let m = genericZeroMethod.MakeGenericMethod [|t|]
+            let res = m.Invoke(null, [||])
+            Expr.Value(res, t)
+
+        static member One(t : System.Type) =
+            let m = genericOneMethod.MakeGenericMethod [|t|]
+            let res = m.Invoke(null, [||])
+            Expr.Value(res, t)
+
+
+        static member PreIncrementExpression(e : Expr) =
+            match e with
+                | Var v ->
+                    Expr.Sequential(Expr.VarSet(v, Expr.Add(Expr.Var v, Expr.One(v.Type))), Expr.Var v)
+
+                | FieldGet(t, f) ->
+                    let get = e
+                    let set v = 
+                        match t with
+                            | Some t -> Expr.FieldSet(t, f, v)
+                            | None -> Expr.FieldSet(f, v)
+
+                    Expr.Sequential(set (Expr.Add(get, Expr.One(e.Type))), get)
+
+                | PropertyGet(t, p, i) ->
+                    let get = e
+                    let set v = 
+                        match t with
+                            | Some t -> Expr.PropertySet(t, p, v, i)
+                            | None -> Expr.PropertySet(p, v, i)
+
+                    Expr.Sequential(set (Expr.Add(get, Expr.One(e.Type))), get)
+                
+                | _ ->
+                    failwith "cannot increment: %A" e
+
+        static member PreDecrementExpression(e : Expr) =
+            match e with
+                | Var v ->
+                    Expr.Sequential(Expr.VarSet(v, Expr.Subtract(Expr.Var v, Expr.One(v.Type))), Expr.Var v)
+
+                | FieldGet(t, f) ->
+                    let get = e
+                    let set v = 
+                        match t with
+                            | Some t -> Expr.FieldSet(t, f, v)
+                            | None -> Expr.FieldSet(f, v)
+
+                    Expr.Sequential(set (Expr.Subtract(get, Expr.One(e.Type))), get)
+
+                | PropertyGet(t, p, i) ->
+                    let get = e
+                    let set v = 
+                        match t with
+                            | Some t -> Expr.PropertySet(t, p, v, i)
+                            | None -> Expr.PropertySet(p, v, i)
+
+                    Expr.Sequential(set (Expr.Subtract(get, Expr.One(e.Type))), get)
+                
+                | _ ->
+                    failwith "cannot decrement: %A" e
+
+        static member PostIncrementExpression(e : Expr) =
+            match e with
+                | Var v ->
+                    let inc = Var("inc", e.Type)
+                    Expr.Let(inc, Expr.Var v, Expr.Sequential(Expr.VarSet(v, Expr.Add(Expr.Var v, Expr.One(v.Type))), Expr.Var inc))
+
+                | FieldGet(t, f) ->
+                    let get = e
+                    let set v = 
+                        match t with
+                            | Some t -> Expr.FieldSet(t, f, v)
+                            | None -> Expr.FieldSet(f, v)
+
+                    let inc = Var("inc", e.Type)
+                    Expr.Let(inc, get, Expr.Sequential(set (Expr.Add(get, Expr.One(e.Type))), Expr.Var inc))
+
+                | PropertyGet(t, p, i) ->
+                    let get = e
+                    let set v = 
+                        match t with
+                            | Some t -> Expr.PropertySet(t, p, v, i)
+                            | None -> Expr.PropertySet(p, v, i)
+
+                    let inc = Var("inc", e.Type)
+                    Expr.Let(inc, get, Expr.Sequential(set (Expr.Add(get, Expr.One(e.Type))), Expr.Var inc))
+                
+                | _ ->
+                    failwith "cannot increment: %A" e
+
+        static member PostDecrementExpression(e : Expr) =
+            match e with
+                | Var v ->
+                    let inc = Var("inc", e.Type)
+                    Expr.Let(inc, Expr.Var v, Expr.Sequential(Expr.VarSet(v, Expr.Subtract(Expr.Var v, Expr.One(v.Type))), Expr.Var inc))
+
+                | FieldGet(t, f) ->
+                    let get = e
+                    let set v = 
+                        match t with
+                            | Some t -> Expr.FieldSet(t, f, v)
+                            | None -> Expr.FieldSet(f, v)
+
+                    let inc = Var("inc", e.Type)
+                    Expr.Let(inc, get, Expr.Sequential(set (Expr.Subtract(get, Expr.One(e.Type))), Expr.Var inc))
+
+                | PropertyGet(t, p, i) ->
+                    let get = e
+                    let set v = 
+                        match t with
+                            | Some t -> Expr.PropertySet(t, p, v, i)
+                            | None -> Expr.PropertySet(p, v, i)
+
+                    let inc = Var("inc", e.Type)
+                    Expr.Let(inc, get, Expr.Sequential(set (Expr.Subtract(get, Expr.One(e.Type))), Expr.Var inc))
+                
+                | _ ->
+                    failwith "cannot increment: %A" e
+
 
         static member Empty =
             empty
@@ -352,6 +477,130 @@ module ExpressionExtensions =
                 | _ ->
                     None
 
+        let (|One|_|) (e : Expr) =
+            match e with
+                | Value(i,t) ->
+                    match i with
+                        | :? sbyte as x when x = 1y -> Some t
+                        | :? int16 as x when x = 1s -> Some t
+                        | :? int as x when x = 1 -> Some t
+                        | :? int64 as x when x = 1L -> Some t
+                        | :? byte as x when x = 1uy -> Some t
+                        | :? uint16 as x when x = 1us -> Some t
+                        | :? uint32 as x when x = 1u -> Some t
+                        | :? uint64 as x when x = 1UL -> Some t
+                        | :? float32 as x when x = 1.0f -> Some t
+                        | :? float as x when x = 1.0 -> Some t
+                        | :? decimal as x when x = 1m -> Some t
+                        | :? nativeint as x when x = 1n -> Some t
+                        | :? unativeint as x when x = 1un -> Some t
+                        | :? bigint as x when x = 1I -> Some t
+                        | _ -> None
+                | _ ->
+                    None
+
+        let (|Zero|_|) (e : Expr) =
+            match e with
+                | Value(i,t) ->
+                    match i with
+                        | :? sbyte as x when x = 0y -> Some t
+                        | :? int16 as x when x = 0s -> Some t
+                        | :? int as x when x = 0 -> Some t
+                        | :? int64 as x when x = 0L -> Some t
+                        | :? byte as x when x = 0uy -> Some t
+                        | :? uint16 as x when x = 0us -> Some t
+                        | :? uint32 as x when x = 0u -> Some t
+                        | :? uint64 as x when x = 0UL -> Some t
+                        | :? float32 as x when x = 0.0f -> Some t
+                        | :? float as x when x = 0.0 -> Some t
+                        | :? decimal as x when x = 0m -> Some t
+                        | :? nativeint as x when x = 0n -> Some t
+                        | :? unativeint as x when x = 0un -> Some t
+                        | :? bigint as x when x = 0I -> Some t
+                        | _ -> None
+                | _ ->
+                    None
+
+        let (|PreIncrementExpression|_|) (e : Expr) =
+            match e with
+
+                // %v <- %v + 1; %v
+                | Sequential(VarSet(v, Add(Var(vi), One(_))), Var vr) 
+                    when v = vi && v = vr ->
+                    Some (Expr.Var v)
+
+                // %t.%f <- %t.%f + 1; %t.%f
+                | Sequential(FieldSet(t, f, Add(FieldGet(t1,f1) as ex, One(_))), FieldGet(t2, f2)) 
+                    when t = t1 && t = t2 && f = f1 && f = f2 ->
+                    Some (ex)
+
+                // %t.%p[%i] <- %t.%p[%i] + 1; %t.%p[%i]
+                | Sequential(PropertySet(t, p, i, Add(PropertyGet(t1, p1, i1) as ex, One(_))), PropertyGet(t2, p2, i2)) 
+                    when t = t1 && t = t2 && p = p1 && p = p2 && i = i1 && i = i2 ->
+                    Some (ex)
+
+                | _ ->
+                    None
+
+        let (|PreDecrementExpression|_|) (e : Expr) =
+            match e with
+
+                // %v <- %v - 1; %v
+                | Sequential(VarSet(v, Subtract(Var(vi), One(_))), Var vr) when v = vi && v = vr ->
+                    Some (Expr.Var v)
+
+                // %t.%f <- %t.%f - 1; %t.%f
+                | Sequential(FieldSet(t, f, Subtract(FieldGet(t1,f1) as ex, One(_))), FieldGet(t2, f2)) when t = t1 && t = t2 && f = f1 && f = f2 ->
+                    Some (ex)
+
+                // %t.%p[%i] <- %t.%p[%i] - 1; %t.%p[%i]
+                | Sequential(PropertySet(t, p, i, Subtract(PropertyGet(t1, p1, i1) as ex, One(_))), PropertyGet(t2, p2, i2)) 
+                    when t = t1 && t = t2 && p = p1 && p = p2 && i = i1 && i = i2 ->
+                    Some (ex)
+
+                | _ ->
+                    None
+
+        let (|PostIncrementExpression|_|) (e : Expr) =
+            match e with
+                // let inc = %v in %v <- %v + 1; inc
+                | Let(inc, Var v, Sequential(VarSet(v1, Add(Var v2, One(_))), Var inc1)) 
+                    when inc = inc1 && v = v1 && v = v2 ->
+                    Some (Expr.Var v)
+
+                // let inc = %t.%f in %t.%f <- %t.%f + 1; inc
+                | Let(inc, (FieldGet(t,f) as ex), Sequential(FieldSet(t1, f1, Add(FieldGet(t2,f2), One(_))), Var inc1)) 
+                    when inc = inc1 && t = t1 && t = t2 && f = f1 && f = f2 ->
+                    Some (ex)
+
+                // let inc = %t.%p[%i] in %t.%p[%i] <- %t.%p[%i] + 1; inc
+                | Let(inc, (PropertyGet(t, p, i) as ex), Sequential(PropertySet(t1, p1, i1, Add(PropertyGet(t2, p2, i2), One(_))), Var inc1)) 
+                    when inc = inc1 && t = t1 && t = t2 && p = p1 && p = p2 && i = i1 && i = i2 ->
+                    Some (ex)
+
+                | _ ->
+                    None
+
+        let (|PostDecrementExpression|_|) (e : Expr) =
+            match e with
+                // let inc = %v in %v <- %v - 1; inc
+                | Let(inc, Var v, Sequential(VarSet(v1, Subtract(Var v2, One(_))), Var inc1)) 
+                    when inc = inc1 && v = v1 && v = v2 ->
+                    Some (Expr.Var v)
+
+                // let inc = %t.%f in %t.%f <- %t.%f - 1; inc
+                | Let(inc, (FieldGet(t,f) as ex), Sequential(FieldSet(t1, f1, Subtract(FieldGet(t2,f2), One(_))), Var inc1)) 
+                    when inc = inc1 && t = t1 && t = t2 && f = f1 && f = f2 ->
+                    Some (ex)
+
+                // let inc = %t.%p[%i] in %t.%p[%i] <- %t.%p[%i] - 1; inc
+                | Let(inc, (PropertyGet(t, p, i) as ex), Sequential(PropertySet(t1, p1, i1, Subtract(PropertyGet(t2, p2, i2), One(_))), Var inc1)) 
+                    when inc = inc1 && t = t1 && t = t2 && p = p1 && p = p2 && i = i1 && i = i2 ->
+                    Some (ex)
+
+                | _ ->
+                    None
+
         let private typePrefixPattern = System.Text.RegularExpressions.Regex @"^.*\.(?<methodName>.*)$"
         let private (|Method|_|)  (mi : MethodInfo) =
             let args = mi.GetParameters() |> Seq.map(fun p -> p.ParameterType)
@@ -383,3 +632,6 @@ module ExpressionExtensions =
                     ) when e1 = e && e2 = e && e3 = e && current.Name = "Current" && oType0 = typeof<obj> && oType1 = typeof<obj> && dType = typeof<System.IDisposable> ->
                     ForEach(i, seq, b) |> Some
                 | _ -> None
+
+
+
