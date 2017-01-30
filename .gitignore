@@ -3,3 +3,7 @@ obj
 /build
 /packages/*
 !/packages/*.config
+/paket-files
+/.fake
+/bin/Release
+/bin/Debug

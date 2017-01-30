@@ -101,7 +101,7 @@ module ExpressionExtensions =
                     Expr.Sequential(set (Expr.Add(get, Expr.One(e.Type))), get)
                 
                 | _ ->
-                    failwith "cannot increment: %A" e
+                    failwithf "cannot increment: %A" e
 
         static member PreDecrementExpression(e : Expr) =
             match e with
@@ -127,7 +127,7 @@ module ExpressionExtensions =
                     Expr.Sequential(set (Expr.Subtract(get, Expr.One(e.Type))), get)
                 
                 | _ ->
-                    failwith "cannot decrement: %A" e
+                    failwithf "cannot decrement: %A" e
 
         static member PostIncrementExpression(e : Expr) =
             match e with
@@ -156,7 +156,7 @@ module ExpressionExtensions =
                     Expr.Let(inc, get, Expr.Sequential(set (Expr.Add(get, Expr.One(e.Type))), Expr.Var inc))
                 
                 | _ ->
-                    failwith "cannot increment: %A" e
+                    failwithf "cannot increment: %A" e
 
         static member PostDecrementExpression(e : Expr) =
             match e with
@@ -185,7 +185,7 @@ module ExpressionExtensions =
                     Expr.Let(inc, get, Expr.Sequential(set (Expr.Subtract(get, Expr.One(e.Type))), Expr.Var inc))
                 
                 | _ ->
-                    failwith "cannot increment: %A" e
+                    failwithf "cannot increment: %A" e
 
 
         static member Empty =
